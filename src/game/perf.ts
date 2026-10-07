@@ -192,7 +192,12 @@ export class PerfGovernor {
     this.state.frameMs = 0;
     this.state.tickMs = 0;
     this.state.samples = 0;
-    this.state.fellBackTo2D = false;
+    // fellBackTo2D deliberately SURVIVES reset(): the renderer is only ever
+    // upgraded to 3D at attachCanvas (once per page), so after a fallback the
+    // game stays on 2D for the rest of the page's lifetime. Clearing the latch
+    // on a new match/quality change would report kind=2d with
+    // fellBackTo2D=false while the one-shot guard (renderer kind === "3d")
+    // can never re-fire. Ladder history above is still fully cleared.
   }
 
   setAuto(auto: boolean): void {
@@ -282,6 +287,12 @@ export class PerfGovernor {
 
   /** let the engine re-arm the fallback latch after it actually switched */
   clearFallbackLatch(): void {
+    this.fallbackAsked = false;
+  }
+
+  /** a (re)upgrade to a fresh 3D renderer re-arms the one-shot fallback */
+  noteUpgradedTo3D(): void {
+    this.state.fellBackTo2D = false;
     this.fallbackAsked = false;
   }
 }

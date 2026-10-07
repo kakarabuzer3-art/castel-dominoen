@@ -6,6 +6,7 @@
  * Run: npm run mp   (default port 8787, override: MP_PORT=9000)
  */
 import { WebSocketServer, type WebSocket } from "ws";
+import { pathToFileURL } from "node:url";
 import { defaultMatchConfig, type MatchConfig } from "../game/constants";
 import { Game } from "../game/engine";
 import type { ReplayEvent } from "../game/replay";
@@ -269,7 +270,8 @@ export function startServer(opts: ServerOpts = {}): {
 
 const isDirectRun =
   process.env.MP_RUN === "1" ||
-  (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop() ?? ""));
+  (process.argv[1] !== undefined &&
+    import.meta.url === pathToFileURL(process.argv[1]).href);
 if (isDirectRun) {
   startServer();
 }

@@ -10,10 +10,12 @@ import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { readFile, mkdir } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const DIST = new URL("../dist", import.meta.url).pathname;
-const SHOTS = new URL("../shots", import.meta.url).pathname;
+// fileURLToPath: URL.pathname is percent-encoded and drive-broken on Windows
+const DIST = fileURLToPath(new URL("../dist", import.meta.url));
+const SHOTS = fileURLToPath(new URL("../shots", import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 
 const MIME = {
@@ -27,8 +29,10 @@ const MIME = {
 
 const server = createServer(async (req, res) => {
   try {
-    const path = normalize(req.url.split("?")[0]);
-    const file = join(DIST, path === "/" ? "index.html" : path);
+    // Windows: path.normalize("/") === "\\" — compare the raw path first
+    const raw = req.url.split("?")[0];
+    const path = raw === "/" || raw === "\\" ? "/index.html" : normalize(raw);
+    const file = join(DIST, path);
     const data = await readFile(file);
     res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
     res.end(data);
@@ -1492,10 +1496,24 @@ await relaunchMain();
     const a = g.worldToScreen(cx - 300, cy - 220);
     const b = g.worldToScreen(cx + 300, cy + 220);
     const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-    return {
+    const box = {
       x0: cl(a.x, 10, 1430), y0: cl(a.y, 90, 850),
       x1: cl(b.x, 10, 1430), y1: cl(b.y, 90, 850),
     };
+    // full-HUD panels dock over the top-left field; a drag that STARTS on a
+    // panel is legitimately swallowed by it, so walk the start corner onto
+    // open canvas (the assertion still requires a real canvas drag).
+    const onCanvas = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      return !!el && el.tagName === "CANVAS";
+    };
+    let guard = 0;
+    while (!onCanvas(box.x0, box.y0) && guard++ < 80 &&
+           box.x0 < box.x1 - 80 && box.y0 < box.y1 - 80) {
+      box.x0 += 20;
+      box.y0 += 20;
+    }
+    return box;
   });
   await page.mouse.move(sel.x0, sel.y0);
   await page.mouse.down();
@@ -1503,7 +1521,7 @@ await relaunchMain();
   await page.mouse.up();
   await page.waitForTimeout(400);
   const nSel = await page.evaluate(() => window.__game.selUnits().length);
-  check("box select works with an epic army on screen", nSel > 20, `selected=${nSel}`);
+  check("box select works with an epic army on screen", nSel > 20, `selected=${nSel} box=${sel.x0},${sel.y0}→${sel.x1},${sel.y1}`);
   await page.mouse.click(Math.round((sel.x0 + sel.x1) / 2), Math.round(sel.y1 + 40), {
     button: "right",
   });
@@ -1607,12 +1625,15 @@ await relaunchMain();
 // this section runs three live processes (p1 + p2 + relay server) at once
 await relaunchMain();
 // kill stray mp-servers from previously crashed runs — they hold MP_PORT 8897
-for (const pid of readdirSync("/proc")) {
-  if (!/^\d+$/.test(pid) || pid === String(process.pid)) continue;
-  try {
-    const cl = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-    if (cl.includes("src/net/server.ts")) process.kill(Number(pid), 9);
-  } catch { /* gone or not ours */ }
+// (/proc is Linux-only; on Windows rely on spawn cleanup below)
+if (process.platform === "linux" || process.platform === "android") {
+  for (const pid of readdirSync("/proc")) {
+    if (!/^\d+$/.test(pid) || pid === String(process.pid)) continue;
+    try {
+      const cl = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      if (cl.includes("src/net/server.ts")) process.kill(Number(pid), 9);
+    } catch { /* gone or not ours */ }
+  }
 }
 // spawn the relay directly under node (--import tsx): a single process, so
 // mpServer.kill() below really kills it (npx tsx leaves orphaned children)
@@ -1621,7 +1642,7 @@ const mpServer = spawn(process.execPath, ["--import", "tsx", "src/net/server.ts"
   env: { ...process.env, MP_PORT: "8897" },
   stdio: "ignore",
 });
-await new Promise((r) => setTimeout(r, 4000));
+await new Promise((r) => setTimeout(r, 6000)); // tsx cold-start can take ~4-5 s
 try {
   // reuse the main page as seat 0 (renderer memory is scarce under SwiftShader)
   const p1 = page;

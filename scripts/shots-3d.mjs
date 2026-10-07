@@ -10,16 +10,18 @@
 import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const DIST = new URL("../dist", import.meta.url).pathname;
-const SHOTS = new URL("../shots", import.meta.url).pathname;
+const DIST = fileURLToPath(new URL("../dist", import.meta.url));
+const SHOTS = fileURLToPath(new URL("../shots", import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" };
 const server = createServer(async (req, res) => {
   try {
-    const path = normalize(req.url.split("?")[0]);
-    const file = join(DIST, path === "/" ? "index.html" : path);
+    const raw = req.url.split("?")[0];
+    const path = raw === "/" || raw === "\\" ? "/index.html" : normalize(raw);
+    const file = join(DIST, path);
     const data = await readFile(file);
     res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
     res.end(data);

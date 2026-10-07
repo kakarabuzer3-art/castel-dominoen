@@ -320,6 +320,7 @@ export class Game {
       this.renderer?.dispose();
       const r3 = new m.Renderer3D(this, nc);
       this.renderer = r3;
+      this.perf.noteUpgradedTo3D(); // fresh 3D renderer → fresh one-shot fallback
       if (this.minimapEl) r3.setMinimap(this.minimapEl);
       this.bindInputTracked(nc);
       this.publish(true);
@@ -3981,6 +3982,11 @@ export class Game {
       (e) => {
         const ev = e as WheelEvent;
         ev.preventDefault();
+        // Shift+wheel tilts the 3D camera pitch (RTS strategic ↔ cinematic)
+        if (ev.shiftKey && this.renderer?.kind === "3d") {
+          (this.renderer as Renderer3D).nudgePitch(ev.deltaY > 0 ? -0.08 : 0.08);
+          return;
+        }
         const rect = canvas.getBoundingClientRect();
         const sx = ev.clientX - rect.left;
         const sy = ev.clientY - rect.top;
@@ -4036,6 +4042,9 @@ export class Game {
       } else if (k === "x" && !ev.repeat) {
         if (this.renderer?.kind === "3d")
           (this.renderer as Renderer3D).rotateCamera(1);
+      } else if (k === "c" && !ev.repeat) {
+        if (this.renderer?.kind === "3d")
+          (this.renderer as Renderer3D).cyclePitch();
       } else if (k === "v" && !ev.repeat) {
         this.cycleFormation();
       } else if (k === "tab" && !ev.repeat) {
