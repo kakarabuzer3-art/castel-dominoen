@@ -1,0 +1,45 @@
+{
+  "name": "castle-dominion",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Castle Dominion \u2014 an original medieval kingdom RTS that runs in your browser.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "mp": "tsx src/net/server.ts",
+    "sim": "tsx scripts/simtest.ts",
+    "test:maps": "tsx scripts/maps-test.ts",
+    "test:systems": "tsx scripts/phase7-test.ts",
+    "test:campaign": "tsx scripts/campaign-test.ts",
+    "test:mp": "tsx scripts/mp-test.ts",
+    "test:perf": "tsx scripts/perf-test.ts",
+    "test:browser": "node scripts/browser-test.mjs",
+    "test": "npm run sim && npm run test:maps && npm run test:systems && npm run test:campaign && npm run test:mp && npm run test:perf && npm run test:browser",
+    "audit:maps": "tsx scripts/audit-map-fingerprint.ts",
+    "audit:sim": "tsx scripts/audit-sim-fingerprint.ts",
+    "shots:3d": "node scripts/shots-3d.mjs",
+    "shots:final": "node scripts/shots-final.mjs 1 && node scripts/shots-final.mjs 2 && node scripts/shots-final.mjs 3"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.9",
+    "@types/node": "^26.6.4",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "^1.63.0",
+    "tailwindcss": "^4.0.9",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.2",
+    "vite": "^6.2.0"
+  }
+}

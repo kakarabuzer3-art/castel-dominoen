@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0d0f0a;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas {
+  display: block;
+  touch-action: none;
+}
+
+.font-medieval {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+/* ── premium glass panel chrome ─────────────────────────────────────── */
+.panel {
+  background: linear-gradient(
+    160deg,
+    rgba(46, 36, 22, 0.78) 0%,
+    rgba(24, 18, 11, 0.72) 100%
+  );
+  backdrop-filter: blur(10px) saturate(1.15);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  border: 1px solid rgba(216, 178, 92, 0.28);
+  box-shadow:
+    0 6px 24px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 226, 160, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+  border-radius: 12px;
+  color: #efe4c8;
+}
+
+.btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(216, 178, 92, 0.22);
+  background: linear-gradient(
+    180deg,
+    rgba(72, 56, 32, 0.55) 0%,
+    rgba(38, 28, 16, 0.65) 100%
+  );
+  backdrop-filter: blur(6px);
+  color: #efe4c8;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    filter 0.12s,
+    border-color 0.12s,
+    box-shadow 0.2s,
+    transform 0.05s;
+  user-select: none;
+}
+.btn:hover:not(:disabled) {
+  filter: brightness(1.3);
+  border-color: rgba(232, 200, 119, 0.6);
+  box-shadow: 0 0 12px rgba(216, 178, 92, 0.25);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+.btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.btn.active {
+  border-color: #e8c877;
+  box-shadow:
+    0 0 10px rgba(232, 200, 119, 0.5),
+    inset 0 0 8px rgba(232, 200, 119, 0.18);
+}
+.btn .kbd {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 9px;
+  color: #c4a86e;
+  font-weight: 600;
+}
+
+.cost-good {
+  color: #d6cbaa;
+}
+.cost-bad {
+  color: #ff8a70;
+}
+
+.gold-title {
+  color: #f0d492;
+  text-shadow:
+    0 2px 14px rgba(232, 200, 119, 0.45),
+    0 0 40px rgba(232, 200, 119, 0.2);
+}
+
+/* ── tooltips ───────────────────────────────────────────────────────── */
+.tip {
+  position: relative;
+}
+.tip .tipbox {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  width: 210px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: linear-gradient(
+    160deg,
+    rgba(40, 31, 18, 0.95),
+    rgba(22, 16, 10, 0.95)
+  );
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(216, 178, 92, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  color: #efe4c8;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease 0.28s,
+    transform 0.16s ease 0.28s;
+  z-index: 60;
+  text-align: left;
+}
+.tip:hover .tipbox {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.tip .tipbox-below {
+  bottom: auto;
+  top: calc(100% + 10px);
+}
+
+/* ── motion ─────────────────────────────────────────────────────────── */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes slidein {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes glowpulse {
+  0%,
+  100% {
+    text-shadow:
+      0 2px 14px rgba(232, 200, 119, 0.45),
+      0 0 40px rgba(232, 200, 119, 0.2);
+  }
+  50% {
+    text-shadow:
+      0 2px 18px rgba(232, 200, 119, 0.7),
+      0 0 60px rgba(232, 200, 119, 0.35);
+  }
+}
+.anim-rise {
+  animation: rise 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.anim-fadein {
+  animation: fadein 0.4s ease both;
+}
+.anim-slidein {
+  animation: slidein 0.3s ease both;
+}
+.anim-glow {
+  animation: glowpulse 3.2s ease-in-out infinite;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #4d3b26;
+  border-radius: 4px;
+}
+
+/* ── high contrast accessibility mode ───────────────────────────────── */
+.hc .panel {
+  background: rgba(8, 6, 3, 0.97);
+  border-color: rgba(255, 215, 122, 0.65);
+  color: #fff8e7;
+}
+.hc .btn {
+  background: rgba(20, 14, 8, 0.95);
+  border-color: rgba(255, 215, 122, 0.5);
+  color: #fff8e7;
+}
+.hc .cost-good {
+  color: #eaffe0;
+}
+.hc .cost-bad {
+  color: #ffb3a0;
+}
+.hc .text-\[\#9c8a63\],
+.hc .text-\[\#8a7a58\],
+.hc .text-\[\#6f5f3f\] {
+  color: #d8cba5 !important;
+}
+
+/* ── HUD drawers, edge rails & cinematic mode ───────────────────────── */
+@keyframes drawerin {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.anim-drawerin {
+  animation: drawerin 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.1) both;
+}
+.rail-tab {
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 226, 160, 0.1);
+}
+.rail-pin,
+.rail-expand {
+  position: absolute;
+  z-index: 30;
+  padding: 0 6px;
+  min-width: 22px;
+  height: 20px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.85;
+}
+.rail-pin {
+  top: -9px;
+  right: -9px;
+}
+.rail-expand {
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.rail-pin:hover,
+.rail-expand:hover {
+  opacity: 1;
+}
+
+/* cinematic letterbox */
+.cine-bar {
+  background: linear-gradient(to bottom, #000 62%, rgba(0, 0, 0, 0));
+}
+.cine-bar-b {
+  background: linear-gradient(to top, #000 62%, rgba(0, 0, 0, 0));
+}
+@keyframes cinehint {
+  0% {
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.cine-hint {
+  animation: cinehint 6.5s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-drawerin,
+  .cine-hint {
+    animation-duration: 0.01s;
+  }
+  .cine-hint {
+    opacity: 1;
+  }
+}
