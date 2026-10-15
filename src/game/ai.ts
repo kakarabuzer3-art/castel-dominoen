@@ -139,7 +139,9 @@ export class AIController {
     if (!d) return;
     if (d.personality !== undefined)
       this.personality =
-        PERSONALITIES[Math.max(0, Math.min(2, d.personality))];
+        PERSONALITIES[
+          Math.max(0, Math.min(PERSONALITIES.length - 1, d.personality))
+        ];
     this.waveIdx = d.waveIdx ?? 0;
     this.lastWave = d.lastWave ?? -999;
     this.lastRaid = d.lastRaid ?? -999;

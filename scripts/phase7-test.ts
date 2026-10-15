@@ -1,6 +1,7 @@
 /** Phase 7 systems: fog of war, repair, formations, veterancy. */
 import { TILE, defaultMatchConfig, type MatchConfig } from "../src/game/constants";
 import { Game } from "../src/game/engine";
+import { sanitizeReplayEvent } from "../src/game/replay";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -313,6 +314,121 @@ let replayRef: ReturnType<Game["dumpReplay"]> = null;
     "save/load cross-size: XL match absorbs S save",
     okXS && gx.grid.w === 84 && gx.cfg.size === "S",
     `${gx.grid.w}x${gx.grid.h}`,
+  );
+}
+
+// ── regression: every lord's AI personality must survive save/load ───────────
+// (ai.ts used to clamp the saved personality to 0..2, so Master Torvald — the
+// Siege Master, personality 3 — silently came back as the Economic lord)
+{
+  type AiPeek = { ai: { personality: { id: number; name: string } } };
+  for (const lord of [0, 1, 2, 3]) {
+    const g = new Game(null, 100 + lord);
+    g.startMatch({ ...defaultMatchConfig(), size: "S", map: "verdant", seed: 100 + lord, lord } as MatchConfig);
+    g.step(5);
+    const before = (g as unknown as AiPeek).ai.personality;
+    const g2 = new Game(null, 1);
+    const ok = g2.loadFrom(g.serialize());
+    const after = (g2 as unknown as AiPeek).ai.personality;
+    check(
+      `save/load lord ${lord}: AI personality preserved`,
+      ok && after.id === before.id,
+      `${before.name} -> ${after.name}`,
+    );
+  }
+}
+
+// ── regression: network intents are untrusted input ─────────────────────────
+// The MP relay forwards whatever a peer sends. sanitizeReplayEvent() must
+// accept every honest command and reject malformed / hostile ones, and the
+// engine must never let one seat spend another seat's resources.
+{
+  const ok = [
+    { k: "move", ids: [1, 2], x: 10.5, y: -3 },
+    { k: "amove", ids: [], x: 0, y: 0 },
+    { k: "atk", ids: [4], target: 9 },
+    { k: "harv", ids: [4], node: 2 },
+    { k: "stop", ids: [4] },
+    { k: "rc", x: 5, y: 6, sel: [1], selB: -1 },
+    { k: "place", type: "house", tx: 12, ty: 14 },
+    { k: "train", bId: 3, unit: "villager" },
+    { k: "res", bId: 3, up: "wheelbarrow" },
+    { k: "trade", kind: "sellWood" },
+    { k: "form", v: 2 },
+  ];
+  check(
+    "intent sanitizer: every honest command kind is accepted",
+    ok.every((e) => sanitizeReplayEvent(e) !== null),
+  );
+
+  const bad: Array<[string, unknown]> = [
+    ["null", null],
+    ["string", "move"],
+    ["number", 5],
+    ["empty object", {}],
+    ["unknown kind", { k: "nuke" }],
+    ["ids not an array", { k: "move", ids: "x", x: 1, y: 1 }],
+    ["negative id", { k: "stop", ids: [-1] }],
+    ["fractional id", { k: "stop", ids: [1.5] }],
+    ["oversized id list", { k: "stop", ids: new Array(1501).fill(1) }],
+    ["NaN coordinate", { k: "move", ids: [1], x: NaN, y: 1 }],
+    ["Infinity coordinate", { k: "move", ids: [1], x: 1, y: Infinity }],
+    ["huge coordinate", { k: "move", ids: [1], x: 1e9, y: 1 }],
+    ["string coordinate", { k: "amove", ids: [1], x: "5", y: 1 }],
+    ["placing a free keep", { k: "place", type: "keep", tx: 3, ty: 3 }],
+    ["building type __proto__", { k: "place", type: "__proto__", tx: 3, ty: 3 }],
+    ["building type constructor", { k: "place", type: "constructor", tx: 3, ty: 3 }],
+    ["fractional tile", { k: "place", type: "house", tx: 1.5, ty: 3 }],
+    ["unknown unit", { k: "train", bId: 1, unit: "dragon" }],
+    ["unit toString", { k: "train", bId: 1, unit: "toString" }],
+    ["negative building id", { k: "train", bId: -2, unit: "villager" }],
+    ["market kind __proto__", { k: "trade", kind: "__proto__" }],
+    ["formation out of range", { k: "form", v: 9 }],
+    ["overlong upgrade id", { k: "res", bId: 1, up: "x".repeat(41) }],
+  ];
+  const leaked = bad.filter(([, e]) => sanitizeReplayEvent(e) !== null).map(([n]) => n);
+  check(
+    `intent sanitizer: ${bad.length} malformed/hostile intents all rejected`,
+    leaked.length === 0,
+    leaked.join(", "),
+  );
+
+  const clean = sanitizeReplayEvent({ k: "stop", ids: [1], t: 99999, evil: "x" }) as
+    | (Record<string, unknown> & { t: number })
+    | null;
+  check(
+    "intent sanitizer: extra fields stripped, time reset to 0",
+    !!clean && clean.t === 0 && !("evil" in clean),
+  );
+
+  // engine: seat 1 targeting seat 0's keep must change nothing; seat 0 can
+  const g = new Game(null, 5150);
+  g.startMatch({ ...defaultMatchConfig(), size: "S", map: "verdant", seed: 5150, lord: 0 } as MatchConfig);
+  const k0 = g.buildingById.get(g.keeps[0])!;
+  const food0 = g.res[0].food;
+  const gold0 = g.res[0].gold;
+  const bCount = g.buildings.length;
+
+  g.applyReplayEvent({ t: 0, k: "train", bId: k0.id, unit: "villager" }, 1);
+  g.applyReplayEvent({ t: 0, k: "res", bId: k0.id, up: "wheelbarrow" }, 1);
+  g.applyReplayEvent({ t: 0, k: "place", type: "keep", tx: 30, ty: 30 }, 0);
+  g.applyReplayEvent({ t: 0, k: "place", type: "keep", tx: 30, ty: 30 }, 1);
+  check(
+    "engine: foreign seat cannot train/research on my keep, nobody can place a keep",
+    k0.queue.length === 0 &&
+      k0.research === null &&
+      g.res[0].food === food0 &&
+      g.res[0].gold === gold0 &&
+      g.buildings.length === bCount,
+    `queue=${k0.queue.length} research=${k0.research ? "set" : "none"} food=${g.res[0].food}/${food0} buildings=${g.buildings.length}/${bCount}`,
+  );
+
+  g.applyReplayEvent({ t: 0, k: "train", bId: k0.id, unit: "villager" }, 0);
+  g.applyReplayEvent({ t: 0, k: "res", bId: k0.id, up: "wheelbarrow" }, 0);
+  check(
+    "engine: control — the owning seat can still train and research",
+    k0.queue.length === 1 && k0.research !== null && g.res[0].food < food0,
+    `queue=${k0.queue.length} research=${k0.research ? "set" : "none"} food=${g.res[0].food}/${food0}`,
   );
 }
 

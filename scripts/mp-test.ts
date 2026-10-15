@@ -121,6 +121,75 @@ const waitFor = async (fn: () => boolean, ms = 4000): Promise<void> => {
     await new Promise((r) => setTimeout(r, 30));
 };
 
+/**
+ * A peer is untrusted. Malformed intents must get an error reply (not throw
+ * inside the simulation), garbage frames must be ignored, and one seat must not
+ * be able to spend the other seat's resources. The relay has to keep ticking.
+ */
+async function hostile(): Promise<void> {
+  const server2 = startServer({ port: PORT + 1, tickMs: 5, timeScale: 4, intentDelayTicks: 6 });
+  await new Promise((r) => setTimeout(r, 300));
+  const url2 = `ws://localhost:${PORT + 1}`;
+  const A = await mkClient(url2);
+  A.ws.send(JSON.stringify({ k: "host" }));
+  await waitFor(() => A.seat === 0);
+  const B = await mkClient(url2);
+  B.ws.send(JSON.stringify({ k: "join", code: A.code }));
+  await waitFor(() => B.seat === 1);
+  await waitFor(() => A.started && B.started, 5000);
+
+  const errors: string[] = [];
+  A.ws.on("message", (raw) => {
+    const m = JSON.parse(String(raw));
+    if (m.k === "error") errors.push(String(m.msg));
+  });
+  const room = [...server2.rooms.values()][0];
+  const srv = room.game!;
+  const k1 = srv.buildingById.get(srv.keeps[1])!;
+
+  const malformed: unknown[] = [
+    { k: "move", ids: "x", x: 1, y: 1 },
+    { k: "place", type: "keep", tx: 5, ty: 5 },
+    { k: "stop", ids: [-5] },
+    { k: "train", bId: 1, unit: "dragon" },
+    null,
+    "boom",
+  ];
+  for (const ev of malformed) A.ws.send(JSON.stringify({ k: "intent", ev }));
+  A.ws.send("this is not json at all");
+  // well-formed, but aimed at the *other* seat's keep
+  A.ws.send(JSON.stringify({ k: "intent", ev: { k: "train", bId: k1.id, unit: "villager" } }));
+
+  const tick0 = srv.tickCount;
+  const drive = setInterval(() => {
+    pump(A);
+    pump(B);
+  }, 8);
+  await waitFor(() => srv.tickCount > tick0 + 120, 8000);
+  clearInterval(drive);
+
+  const rejected = errors.filter((e) => e === "Invalid command ignored.").length;
+  check(
+    "hostile peer: every malformed intent answered with an error reply",
+    rejected === malformed.length,
+    `${rejected}/${malformed.length}`,
+  );
+  check(
+    "hostile peer: relay keeps ticking and the room survives",
+    srv.tickCount > tick0 + 120 && room.state === "playing" && server2.rooms.has(room.code),
+    `ticks +${srv.tickCount - tick0}, state=${room.state}`,
+  );
+  check(
+    "hostile peer: seat 0 cannot train on seat 1's keep",
+    k1.queue.length === 0,
+    `queue=${k1.queue.length}`,
+  );
+
+  A.ws.close();
+  B.ws.close();
+  server2.close();
+}
+
 async function main(): Promise<void> {
   const server = startServer({ port: PORT, tickMs: 5, timeScale: 4, intentDelayTicks: 6 });
   await new Promise((r) => setTimeout(r, 300));
@@ -272,6 +341,7 @@ async function main(): Promise<void> {
   A.ws.close();
   liveB.ws.close();
   server.close();
+  await hostile();
   console.log(fails === 0 ? "\nMP TEST PASSED" : `\n${fails} MP CHECK(S) FAILED`);
   process.exit(fails ? 1 : 0);
 }
