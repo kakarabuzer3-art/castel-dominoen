@@ -856,16 +856,19 @@ export class Game {
         break;
       }
       case "place":
-        this.place(team, ev.type, ev.tx, ev.ty);
+        // keeps are never player-placed (cost {} would make them free)
+        if (ev.type !== "keep") this.place(team, ev.type, ev.tx, ev.ty);
         break;
       case "train": {
+        // a command may only act on the sender's own buildings: trainAt() pays
+        // from b.team, so without this check a peer could drain the enemy
         const b = this.buildingById.get(ev.bId);
-        if (b) this.trainAt(b, ev.unit);
+        if (b && b.team === team) this.trainAt(b, ev.unit);
         break;
       }
       case "res": {
         const b = this.buildingById.get(ev.bId);
-        if (b) this.startResearch(b, ev.up);
+        if (b && b.team === team) this.startResearch(b, ev.up);
         break;
       }
       case "trade":

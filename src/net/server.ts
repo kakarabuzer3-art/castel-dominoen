@@ -9,7 +9,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { pathToFileURL } from "node:url";
 import { defaultMatchConfig, type MatchConfig } from "../game/constants";
 import { Game } from "../game/engine";
-import type { ReplayEvent } from "../game/replay";
+import { sanitizeReplayEvent, type ReplayEvent } from "../game/replay";
 
 export interface ServerOpts {
   port?: number;
@@ -67,6 +67,16 @@ export function startServer(opts: ServerOpts = {}): {
     rooms.delete(room.code);
   };
 
+  /** a throwing tick must end that one room, never take the whole relay down */
+  const failRoom = (room: Room, err: unknown) => {
+    console.error(`[mp-server] room ${room.code} crashed:`, err);
+    if (room.timer) clearInterval(room.timer);
+    room.timer = null;
+    room.state = "ended";
+    broadcast(room, { k: "error", msg: "Server error: the match was ended." });
+    stopRoom(room);
+  };
+
   const startMatch = (room: Room) => {
     const cfg = { ...defaultMatchConfig(), mode: "multiplayer" as const };
     room.cfg = cfg;
@@ -85,10 +95,15 @@ export function startServer(opts: ServerOpts = {}): {
       if (g.phase === "playing") {
         acc += (tickMs / 1000) * timeScale;
         let stepped = false;
-        while (acc >= 1 / 30) {
-          g.step(1 / 30);
-          acc -= 1 / 30;
-          stepped = true;
+        try {
+          while (acc >= 1 / 30) {
+            g.step(1 / 30);
+            acc -= 1 / 30;
+            stepped = true;
+          }
+        } catch (err) {
+          failRoom(room, err);
+          return;
         }
         if (!stepped) return;
         broadcast(room, { k: "tick", i: g.tickCount });
@@ -215,10 +230,15 @@ export function startServer(opts: ServerOpts = {}): {
                 if (g.phase === "playing") {
                   acc2 += (tickMs / 1000) * timeScale;
                   let stepped = false;
-                  while (acc2 >= 1 / 30) {
-                    g.step(1 / 30);
-                    acc2 -= 1 / 30;
-                    stepped = true;
+                  try {
+                    while (acc2 >= 1 / 30) {
+                      g.step(1 / 30);
+                      acc2 -= 1 / 30;
+                      stepped = true;
+                    }
+                  } catch (err) {
+                    failRoom(r, err);
+                    return;
                   }
                   if (!stepped) return;
                   broadcast(r, { k: "tick", i: g.tickCount });
@@ -245,8 +265,12 @@ export function startServer(opts: ServerOpts = {}): {
           break;
         }
         case "intent": {
-          if (room && seat !== null)
-            handleIntent(room, seat, m.ev as ReplayEvent);
+          if (room && seat !== null) {
+            // network input is untrusted: only well-formed commands get through
+            const ev = sanitizeReplayEvent(m.ev);
+            if (ev) handleIntent(room, seat, ev);
+            else send(ws, { k: "error", msg: "Invalid command ignored." });
+          }
           break;
         }
         case "ping": {
