@@ -7,6 +7,7 @@ import {
   type ObjectiveDef,
 } from "./campaign";
 import { sfx } from "./audio";
+import { MindSystem } from "./minds";
 import {
   saveReplay,
   type ReplayEvent,
@@ -234,6 +235,13 @@ export class Game {
   private pathReqs: PathReq[] = [];
   private cellMap = new Map<number, number[]>();
   private ai!: AIController;
+  /**
+   * Phase 2 "minds": named villagers with traits, needs, mood and memories.
+   * Observational in v1 — it reads the simulation and never changes it, never
+   * touches `rnd` and is NOT part of stateHash(), so the recorded behaviour
+   * fingerprints stay identical (see src/game/minds.ts).
+   */
+  readonly minds: MindSystem = new MindSystem(this);
   private rnd: () => number = Math.random;
   private lastRaidMsg = -999;
   private autoBuildT = 1;
@@ -596,6 +604,7 @@ export class Game {
     this.zoomTarget = this.settings.defaultZoom;
     this.clampCam(); // never show out-of-map void on the first frame
     this.ai = new AIController(this, this.cfgPersonality, this.cfg.difficulty);
+    this.minds.reset(seed);
 
     // mode-specific setup
     if (this.cfg.mode === "siege") {
@@ -1192,7 +1201,18 @@ export class Game {
       missionName: this.mission?.name ?? "",
       objectives: this.objectives.map((o) => ({ label: o.label, done: o.done })),
       messages: this.messages.slice(-4),
+      mind: this.selectedMind(),
+      moods: this.minds.stats(this.myTeam),
     };
+  }
+
+  /** the mind of the single selected villager of mine, else null */
+  private selectedMind(): HudSnapshot["mind"] {
+    if (this.selection.size !== 1) return null;
+    const [id] = this.selection;
+    const e = this.byId.get(id);
+    if (!e || !isUnit(e) || !this.isMine(e.team) || e.type !== "villager") return null;
+    return this.minds.viewOf(id);
   }
 
   private buildSelSummary(): HudSnapshot["sel"] {
@@ -2082,6 +2102,7 @@ export class Game {
     }
 
     this.recomputePop();
+    this.minds.update(); // once per second of game time (reads only)
 
     // ── mode timers: survival victory & global time limit
     const limit =
@@ -3298,6 +3319,7 @@ export class Game {
       if (this.kills === 1) this.unlock("firstblood");
     }
     this.grief[u.team] += POP.griefUnit;
+    this.minds.noteDeath(u); // witnesses remember; must run while u is still in byId
     this.removeUnit(u);
     this.markHud();
   }
@@ -4814,6 +4836,7 @@ export class Game {
       cam: { ...this.cam },
       keeps: this.keeps,
       ai: this.ai.serialize(),
+      minds: this.minds.serialize(),
       explored0: this.fogOn() ? b64(this.explored[0]) : null,
       nodes: this.nodes.map((n) => [n.id, Math.round(n.amount)]),
       buildings: this.buildings.map((b) => ({
@@ -4998,6 +5021,8 @@ export class Game {
     this.zoomTarget = this.cam.zoom;
     this.clampCam(); // saves from older builds may hold unclamped cameras
     this.ai.deserialize(d.ai);
+    // units exist by now; older saves have no "minds" and simply start fresh
+    this.minds.deserialize(d.minds);
     if (d.explored0 && this.fogOn()) {
       const bytes = unb64(d.explored0 as string);
       if (bytes.length === this.explored[0].length) this.explored[0].set(bytes);

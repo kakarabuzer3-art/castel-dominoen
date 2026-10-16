@@ -20,6 +20,7 @@ import type {
   UnitType,
 } from "../game/types";
 import { BuildIcon, HappyIcon, PopIcon, ResIcon, UnitIcon } from "./icons";
+import { MindSection } from "./MindSection";
 import { SettingsOverlay, SetupScreen } from "./Setup";
 import { MODES } from "../game/constants";
 import type { Settings } from "../game/settings";
@@ -314,6 +315,7 @@ const PopularityPanel = memo(
       <div className="text-[9px] text-[#6f5f3f] mt-1 leading-snug">
         ≥65%: peasants immigrate · ≤30%: they leave · high = faster work
       </div>
+      <MindSection snap={snap} />
     </aside>
   ),
 );
