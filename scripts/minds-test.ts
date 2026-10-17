@@ -2,15 +2,15 @@
  * Phase 2 — "minds" (named villagers). Headless; no browser, no server.
  *
  *  1. Determinism: same seed -> identical minds; different seed -> different people.
- *  2. Non-interference: a match with the mind layer switched off ends in exactly
- *     the same simulation state (v1 is observational — this is the proof).
+ *  2. Work speed (Phase 3a): mood changes how fast people work — bounded, causal,
+ *     and deterministic now that minds are part of stateHash().
  *  3. Honesty: the "why" list always adds up to the mood it explains.
  *  4. Reactions: different decisions / events produce different, explainable moods.
  *  5. Persistence: save/load restores everyone; garbage input never throws.
  */
 import { defaultMatchConfig, type MatchConfig } from "../src/game/constants";
 import { Game } from "../src/game/engine";
-import { MIND, moodLabel } from "../src/game/minds";
+import { MIND, WORK, moodLabel, workFromMood } from "../src/game/minds";
 import type { Unit } from "../src/game/types";
 
 let fails = 0;
@@ -79,30 +79,68 @@ console.log("== determinism ==");
   check("every person has a full name and two different traits", okIdentity);
 }
 
-// ── 2. non-interference (the core safety guarantee) ──────────────────────────
-console.log("== non-interference ==");
+// ── 2. mood steers work speed (Phase 3a): bounded, causal, deterministic ─────
+console.log("== work speed ==");
 {
-  const seed = 777;
-  const over = { mode: "skirmish" as const, lord: 0, difficulty: 3 as const };
-  const on = mk(seed, over);
-  const off = mk(seed, over);
-  const dead = off.minds as unknown as { update: () => void; noteDeath: (u: Unit) => void };
-  dead.update = () => {};
-  dead.noteDeath = () => {};
-  on.step(600);
-  off.step(600);
-  check("brutal AI skirmish 600 s: minds ON vs OFF identical stateHash", on.stateHash() === off.stateHash(), on.stateHash());
+  check("work multiplier: a neutral mood is exactly x1.00", workFromMood(WORK.neutral) === 1);
   check(
-    "…and every unit identical (id, type, x, y, hp)",
-    snapshotOfUnits(on) === snapshotOfUnits(off),
-    `${on.units.length} units, phase ${on.phase}`,
+    "work multiplier: clamped to [min, max] at the extremes",
+    workFromMood(-50) === WORK.min && workFromMood(500) === WORK.max &&
+      workFromMood(0) >= WORK.min && workFromMood(100) <= WORK.max,
+    `mood 0 -> x${workFromMood(0).toFixed(3)}, mood 100 -> x${workFromMood(100).toFixed(3)}`,
   );
-  check("mind layer actually ran in the ON game", on.minds.count(0) > 0);
+  let mono = true;
+  for (let m = 1; m <= 100; m++) if (workFromMood(m) < workFromMood(m - 1)) mono = false;
+  check("work multiplier never falls as mood rises", mono);
+
+  // One worker, one inexhaustible tree, two worlds. The ONLY difference: in one
+  // a (siege-only, so harmless) enemy catapult stands near the worker and scares them.
+  const pace = (menace: boolean) => {
+    const g = mk(55);
+    const k = g.buildingById.get(g.keeps[0])!;
+    const tree = g.nearestNode("wood", (k.tx + 2) * 32, (k.ty + k.h + 2) * 32, 60 * 32)!;
+    tree.amount = tree.maxAmount = 1e6; // measure pace, not depletion
+    const w = g.spawnUnit(0, "villager", tree.tx * 32 + 16 + 18, tree.ty * 32 + 16);
+    g.assignHarvest(w, tree.id);
+    if (menace) g.spawnUnit(1, "catapult", w.x + 110, w.y);
+    g.step(90);
+    return { wood: g.stats.gathered.wood, view: g.minds.viewOf(w.id)! };
+  };
+  const calm = pace(false);
+  const scared = pace(true);
+  check(
+    "a frightened worker has a lower mood and a lower work multiplier",
+    scared.view.mood < calm.view.mood - 10 && scared.view.work < calm.view.work,
+    `mood ${scared.view.mood} vs ${calm.view.mood}, x${scared.view.work} vs x${calm.view.work}`,
+  );
+  check(
+    "…and really brings in less wood",
+    scared.wood < calm.wood * 0.96,
+    `${scared.wood.toFixed(1)} vs ${calm.wood.toFixed(1)} wood in 90 s`,
+  );
+  const measured = scared.wood / calm.wood;
+  const expected = scared.view.work / calm.view.work;
+  check(
+    "…by about as much as the multipliers say it should",
+    Math.abs(measured - expected) < 0.08,
+    `measured ${measured.toFixed(3)} vs expected ${expected.toFixed(3)}`,
+  );
+}
+
+// ── 2b. determinism now that minds are simulation state ──────────────────────
+console.log("== determinism (minds are state) ==");
+{
+  const over = { mode: "skirmish" as const, lord: 0, difficulty: 3 as const };
+  const a = mk(777, over);
+  const b = mk(777, over);
+  a.step(600);
+  b.step(600);
+  check("brutal AI skirmish 600 s: two runs end in an identical stateHash", a.stateHash() === b.stateHash(), a.stateHash().slice(-40));
+  check("…and every unit is identical (id, type, x, y, hp)", snapshotOfUnits(a) === snapshotOfUnits(b), `${a.units.length} units, phase ${a.phase}`);
+  check("the mind fingerprint is part of stateHash()", a.stateHash().endsWith(`|${a.minds.hash()}`));
 }
 {
-  // The AI run above can end without a single unit dying, which would leave the
-  // death path (noteDeath) unexercised. A scripted brawl guarantees casualties;
-  // both games receive the same script, only the mind layer differs.
+  // a scripted brawl guarantees casualties, so noteDeath and the fallen list run
   const brawl = (g: Game): void => {
     const k = g.buildingById.get(g.keeps[0])!;
     const cx = (k.tx + 3) * 32;
@@ -112,20 +150,17 @@ console.log("== non-interference ==");
     for (let i = 0; i < 6; i++) g.spawnUnit(0, "militia", cx + 60 + i * 10, cy + 12);
     crowd(g, 20);
   };
-  const on = mk(2024);
-  const off = mk(2024);
-  const dead = off.minds as unknown as { update: () => void; noteDeath: (u: Unit) => void };
-  dead.update = () => {};
-  dead.noteDeath = () => {};
-  brawl(on);
-  brawl(off);
-  on.step(90);
-  off.step(90);
-  const deaths = on.deaths[0] + on.deaths[1];
-  check("scripted brawl really produced casualties (noteDeath ran)", deaths >= 5, `${deaths} deaths`);
-  check("brawl: minds ON vs OFF identical stateHash", on.stateHash() === off.stateHash(), on.stateHash());
-  check("brawl: every unit identical", snapshotOfUnits(on) === snapshotOfUnits(off), `${on.units.length} units`);
-  check("brawl: the ON game recorded the fallen by name", on.minds.fallenCount() > 0, `fallen ${on.minds.fallenCount()}`);
+  const a = mk(2024);
+  const b = mk(2024);
+  brawl(a);
+  brawl(b);
+  a.step(90);
+  b.step(90);
+  const deaths = a.deaths[0] + a.deaths[1];
+  check("scripted brawl really produced casualties", deaths >= 5, `${deaths} deaths`);
+  check("brawl: two runs end in an identical stateHash", a.stateHash() === b.stateHash(), a.stateHash().slice(-30));
+  check("brawl: every unit identical", snapshotOfUnits(a) === snapshotOfUnits(b), `${a.units.length} units`);
+  check("brawl: the fallen are recorded by name", a.minds.fallenCount() > 0, `fallen ${a.minds.fallenCount()}`);
 }
 
 // ── 3. honesty: the explanation adds up ──────────────────────────────────────

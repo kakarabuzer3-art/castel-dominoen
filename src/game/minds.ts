@@ -9,9 +9,11 @@
  * the mood — it cannot disagree with the simulation.
  *
  * Design rules (see CONCEPT.md, pillar 4):
- *  - v1 is OBSERVATIONAL. It reads the simulation but never changes it, never
- *    touches `Game.rnd`, and is not part of `stateHash()`; so every recorded
- *    behaviour fingerprint stays bit-identical. Phase 3 will consume moods.
+ *  - Phase 2 was OBSERVATIONAL (read-only). Since Phase 3a moods feed back into
+ *    the simulation in exactly one, bounded place: villager work speed (see
+ *    WORK / workMult). So minds are now simulation state: part of
+ *    `stateHash()`, saved and restored exactly. They still never touch
+ *    `Game.rnd`. Every further gameplay effect needs its own reviewed rebaseline.
  *  - Deterministic: names, traits and temperament come from a hash of
  *    (match seed, unit id); dynamic state only uses + - * / and Math.sqrt /
  *    Math.round / min / max (all exactly specified by IEEE-754 / ECMAScript),
@@ -39,6 +41,24 @@ export const MIND = {
   unhappyBelow: 40,
   desperateBelow: 25,
 } as const;
+
+/**
+ * Phase 3a — the first place a mood changes gameplay: how fast a villager works.
+ * Linear and bounded, built only from + - * / so every peer computes the exact
+ * same number (no Math.pow / exp). Calm baseline is mood 55 -> x1.00.
+ */
+export const WORK = {
+  neutral: 55,
+  slope: 0.006,
+  min: 0.75,
+  max: 1.1,
+} as const;
+
+/** work-speed multiplier a given mood earns (1 = normal) */
+export function workFromMood(mood: number): number {
+  const x = 1 + WORK.slope * (mood - WORK.neutral);
+  return x < WORK.min ? WORK.min : x > WORK.max ? WORK.max : x;
+}
 
 export type NeedId = "food" | "safety" | "belonging" | "purpose";
 export const NEEDS: readonly NeedId[] = ["food", "safety", "belonging", "purpose"];
@@ -210,6 +230,8 @@ export interface MindView {
   label: string;
   traits: Array<{ id: TraitId; name: string; blurb: string }>;
   needs: Record<NeedId, number>;
+  /** how fast this mood makes them work (1 = normal), see WORK */
+  work: number;
   /** the strongest reasons for the current mood, biggest first */
   why: MindWhy[];
   memories: Array<{ text: string; mag: number }>;
@@ -645,6 +667,18 @@ export class MindSystem {
 
   // ── read API ───────────────────────────────────────────────────────────────
 
+  /**
+   * Work-speed multiplier for one villager. Named villagers use their own mood;
+   * the anonymous rest of the crowd uses their team's average mood (cached once
+   * per second and saved with the match, so a reload cannot change it).
+   */
+  workMult(u: Unit): number {
+    const m = this.minds.get(u.id);
+    if (m) return workFromMood(m.mood);
+    const s = this.cache[u.team];
+    return s.named ? workFromMood(s.avgMood) : 1;
+  }
+
   count(team?: Team): number {
     if (team === undefined) return this.minds.size;
     let n = 0;
@@ -692,6 +726,7 @@ export class MindSystem {
         belonging: Math.round(m.needs[2]),
         purpose: Math.round(m.needs[3]),
       },
+      work: Math.round(workFromMood(m.mood) * 100) / 100,
       why,
       memories,
     };
@@ -771,6 +806,9 @@ export class MindSystem {
       v: 1,
       sh: this.shrinesSeen,
       pl: this.plentyT,
+      // the cached village mood drives anonymous villagers' work speed, so it
+      // must come back exactly (memories can change a mood between updates)
+      av: [this.cache[0].avgMood, this.cache[1].avgMood],
       fallen: this.fallen.map((f) => [f.id, f.team, f.name, f.t]),
       m: out,
     };
@@ -782,6 +820,7 @@ export class MindSystem {
       v?: number;
       sh?: number[];
       pl?: number[];
+      av?: number[];
       fallen?: Array<[number, Team, string, number]>;
       m?: Array<[number, number[], string, number, number, number, number, Array<[string, number, number, string]>]>;
     } | null;
@@ -829,5 +868,9 @@ export class MindSystem {
       this.refresh(m);
     }
     this.recomputeStats();
+    if (Array.isArray(d.av) && d.av.length === 2) {
+      this.cache[0].avgMood = clamp(num(d.av[0], this.cache[0].avgMood), 0, 100);
+      this.cache[1].avgMood = clamp(num(d.av[1], this.cache[1].avgMood), 0, 100);
+    }
   }
 }

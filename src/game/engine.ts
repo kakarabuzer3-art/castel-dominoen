@@ -237,9 +237,9 @@ export class Game {
   private ai!: AIController;
   /**
    * Phase 2 "minds": named villagers with traits, needs, mood and memories.
-   * Observational in v1 — it reads the simulation and never changes it, never
-   * touches `rnd` and is NOT part of stateHash(), so the recorded behaviour
-   * fingerprints stay identical (see src/game/minds.ts).
+   * Since Phase 3a a villager's mood scales how fast they work (harvest yield,
+   * construction), so minds ARE simulation state: part of stateHash(), saved,
+   * and restored exactly. They still never touch `rnd` (see src/game/minds.ts).
    */
   readonly minds: MindSystem = new MindSystem(this);
   private rnd: () => number = Math.random;
@@ -790,6 +790,8 @@ export class Game {
     for (const t of [0, 1] as const)
       for (const k of ["wood", "stone", "gold", "food"] as const)
         h += `|${Math.round(this.res[t][k])}`;
+    // minds now steer work speed (Phase 3a), so they are part of the state
+    h += `|${this.minds.hash()}`;
     return h;
   }
 
@@ -2988,7 +2990,9 @@ export class Game {
         u.workT -= hdef.cycle;
         const res: ResKind = node ? NODE_DEFS[node.kind].res : "food";
         const gain =
-          hdef.yield * this.harvestMult(u.team, u.x, u.y, res);
+          hdef.yield *
+          this.harvestMult(u.team, u.x, u.y, res) *
+          this.minds.workMult(u); // Phase 3a: a villager's mood sets their pace
         this.res[u.team][res] += gain;
         if (this.isMine(u.team)) {
           this.stats.gathered[res] += gain;
@@ -3063,7 +3067,7 @@ export class Game {
       const p = this.entPos(site);
       u.facing = Math.atan2(p.y - u.y, p.x - u.x);
       u.workT += dt;
-      site.work -= UNIT_DEFS[u.type].buildRate * dt;
+      site.work -= UNIT_DEFS[u.type].buildRate * dt * this.minds.workMult(u);
       if (this.rnd() < dt * 2.2) {
         const p = this.entPos(site);
         this.burst(

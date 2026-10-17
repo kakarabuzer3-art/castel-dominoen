@@ -40,6 +40,12 @@ export const MindSection = memo(
             <span className="ml-auto text-[10px] text-[#c4a86e]">{m.label}</span>
             <span className="tabular-nums text-[11px] text-[#f6ecd2]">{m.mood}</span>
           </div>
+          <div
+            className={`text-[9.5px] mb-0.5 ${m.work < 0.995 ? "text-[#ff9d8f]" : m.work > 1.005 ? "text-[#8ce08a]" : "text-[#9c8a63]"}`}
+            title="How fast this mood makes them work"
+          >
+            Work speed ×{m.work.toFixed(2)}
+          </div>
           <div className="h-1 rounded bg-[#1c140c] mb-1.5 overflow-hidden">
             <div
               className={`h-full transition-[width] duration-300 ${barColor(m.mood)}`}

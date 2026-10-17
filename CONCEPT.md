@@ -80,9 +80,10 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
 | Phase | State |
 |---|---|
 | 0 — foundation (concept, AI save/load fix, hardened MP relay) | done, merged to `main` (PR #1) |
-| 2 — minds v1 (named villagers) | done on branch `phase-2-minds` — see below |
+| 2 — minds v1 (named villagers) | done, pushed on `phase-2-minds` — see below |
+| 3a — first gameplay effect: mood sets work speed | done on branch `phase-3a-morale-work` — see below |
 | 1 — 3D look (postprocessing, glTF models) | **not started**: needs `npm install` of new packages and a real browser to judge the result |
-| 3 — rumor and morale | next: first phase that lets moods change gameplay |
+| 3b — rumor and morale (social ties, rumors, surrender terms) | next |
 
 ### Phase 2 — what exists
 
@@ -107,6 +108,33 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
 - Deterministic and saved: names/traits are a pure function of (match seed, unit
   id); minds are written into saves and replay checkpoints; old saves load and
   simply start fresh.
+
+### Phase 3a — mood sets work speed (the first effect on gameplay)
+
+- A villager's mood now scales how fast they harvest and build:
+  `x = 1 + 0.006 * (mood - 55)`, clamped to **0.75 .. 1.10** (`WORK` /
+  `workFromMood` in `minds.ts`). Calm baseline (mood 55) is exactly x1.00; named
+  villagers use their own mood, the anonymous crowd uses the team's average mood
+  (cached once per second and saved). Built from `+ - * /` only, so every peer
+  computes bit-identical numbers. The People panel shows "Work speed x1.xx".
+- Minds are therefore **simulation state now**: part of `stateHash()` and saved
+  exactly. They still never touch the sim RNG, and contain no seat-dependent code
+  (so multiplayer/replay hashes stay seat-independent; `test:mp` shows 0 desyncs).
+- **Proved to be the only gameplay change of the effect itself:** with the
+  multiplier forced to 1.0, seed 12345 ends in victory at 765 s — identical to the
+  Phase 2 baseline. Applied to only one team, games still end normally.
+- **It exposed a pre-existing AI flaw, now fixed.** The AI capped itself at 10
+  houses (= population cap 68). A popular kingdom is flooded by immigrants, so in
+  long games the AI sat at 68/68 with ~50 villagers and almost no soldiers, and
+  two of the three `sim` seeds stalled for 45 minutes (the README promises matches
+  always conclude). The house limit is now 18 (epic: 26). After the fix the same
+  seeds conclude (the scripted test bot is beaten at ~2050 s: AI now closes games).
+- **Fingerprints were rebaselined on purpose** (`scripts/fixtures/sim-fingerprints.json`).
+  Reviewed diff: the AI team gathers ~10-25% more in the idle scenarios (content
+  villagers work up to 10% faster); terrain fingerprints are untouched.
+- Not tuned for fun: the numbers are a first guess. Against a scripted bot the
+  AI now wins long games it used to stall on; whether that feels fair to a human
+  needs real playtesting.
 
 ### Not verified yet
 
