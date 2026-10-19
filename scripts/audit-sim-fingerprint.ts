@@ -16,6 +16,13 @@ import {
   type MatchConfig,
 } from "../src/game/constants";
 import { Game } from "../src/game/engine";
+import { MIND_FLAGS } from "../src/game/minds";
+
+// --social off  -> the Phase 3a simulation (must equal sim-fingerprints.json)
+// --social on   -> the shipped game (records sim-fingerprints-social.json)
+const socialIdx = process.argv.indexOf("--social");
+MIND_FLAGS.social = !(socialIdx >= 0 && process.argv[socialIdx + 1] === "off");
+console.log(`social layer: ${MIND_FLAGS.social ? "ON" : "OFF"}`);
 
 interface Case {
   id: string;

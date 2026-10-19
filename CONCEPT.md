@@ -74,3 +74,106 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
 - [ ] Final name + trademark / store-name search (needs a proper search, not a guess).
 - [ ] Baseline FPS number on a real minimum-spec laptop (F3 profiler).
 - [ ] Decide the release channel (Steam / itch.io / own site) and price (Phase 8).
+
+## Status
+
+| Phase | State |
+|---|---|
+| 0 — foundation (concept, AI save/load fix, hardened MP relay) | done, merged to `main` (PR #1) |
+| 2 — minds v1 (named villagers) | done, pushed on `phase-2-minds` — see below |
+| 3a — first gameplay effect: mood sets work speed | done on branch `phase-3a-morale-work` — see below |
+| 1 — 3D look (postprocessing, glTF models) | **not started**: needs `npm install` of new packages and a real browser to judge the result |
+| 3b-1 — friendships and rumors | done on branch `phase-3b-rumors` — see below |
+| 3b-2 — the enemy uses fear (AI whisper campaigns), morale of the whole castle, surrender terms | **next**; not started |
+
+### Phase 2 — what exists
+
+- `src/game/minds.ts`: up to 100 named villagers per team. Each has a name, two
+  traits (of 8), four needs (food / safety / company / purpose), a mood and up to
+  four memories. Needs are driven by the real world: rations, famine, enemy
+  soldiers nearby, shrines, inns, neighbours, whether the person has work, taxes,
+  grief, recent deaths they witnessed.
+- "Why?" is honest by construction: the explanation list is the same set of
+  numbers that produces the mood (`test:minds` asserts `mood == clamp(50 + sum(why))`
+  for every person).
+- HUD: the Popularity drawer gains a "People" section (`src/ui/MindSection.tsx`).
+  Select one villager to see who they are and why they feel as they do; with no
+  villager selected it shows the village mood and the unhappiest people.
+- **v1 is observational on purpose.** It reads the simulation and changes
+  nothing: it never touches the RNG, is not part of `stateHash()`, and a match
+  with the mind layer switched off ends in a bit-identical state (proved by
+  `test:minds`, including a scripted brawl with 30+ casualties). The recorded
+  behaviour fingerprints therefore still match. Moods start to matter in Phase 3,
+  where each gameplay effect will come with a deliberate, reviewed fingerprint
+  rebaseline instead of a silent balance change.
+- Deterministic and saved: names/traits are a pure function of (match seed, unit
+  id); minds are written into saves and replay checkpoints; old saves load and
+  simply start fresh.
+
+### Phase 3a — mood sets work speed (the first effect on gameplay)
+
+- A villager's mood now scales how fast they harvest and build:
+  `x = 1 + 0.006 * (mood - 55)`, clamped to **0.75 .. 1.10** (`WORK` /
+  `workFromMood` in `minds.ts`). Calm baseline (mood 55) is exactly x1.00; named
+  villagers use their own mood, the anonymous crowd uses the team's average mood
+  (cached once per second and saved). Built from `+ - * /` only, so every peer
+  computes bit-identical numbers. The People panel shows "Work speed x1.xx".
+- Minds are therefore **simulation state now**: part of `stateHash()` and saved
+  exactly. They still never touch the sim RNG, and contain no seat-dependent code
+  (so multiplayer/replay hashes stay seat-independent; `test:mp` shows 0 desyncs).
+- **Proved to be the only gameplay change of the effect itself:** with the
+  multiplier forced to 1.0, seed 12345 ends in victory at 765 s — identical to the
+  Phase 2 baseline. Applied to only one team, games still end normally.
+- **It exposed a pre-existing AI flaw, now fixed.** The AI capped itself at 10
+  houses (= population cap 68). A popular kingdom is flooded by immigrants, so in
+  long games the AI sat at 68/68 with ~50 villagers and almost no soldiers, and
+  two of the three `sim` seeds stalled for 45 minutes (the README promises matches
+  always conclude). The house limit is now 18 (epic: 26). After the fix the same
+  seeds conclude (the scripted test bot is beaten at ~2050 s: AI now closes games).
+- **Fingerprints were rebaselined on purpose** (`scripts/fixtures/sim-fingerprints.json`).
+  Reviewed diff: the AI team gathers ~10-25% more in the idle scenarios (content
+  villagers work up to 10% faster); terrain fingerprints are untouched.
+- Not tuned for fun: the numbers are a first guess. Against a scripted bot the
+  AI now wins long games it used to stall on; whether that feels fair to a human
+  needs real playtesting.
+
+### Phase 3b-1 — friendships and rumors
+
+- Every named villager gets up to two friends or kin at arrival (mutual, nobody
+  has more than 3; the pick is a pure function of seed and ids). When someone
+  dies, their friends lose a living tie and remember it by name ("Lost their
+  friend ..."): a friend is hurt more than a stranger who only saw it happen
+  (test: friend -14 vs stranger -10).
+- Rumors are things people *say*, not things that are true. Three start from a
+  real condition (stores running low, the keep recently attacked, a long stretch
+  of full rations); `panic` has no basis at all — it is the seed a rival's
+  whisper campaign would plant (`plantRumor`, not yet used by anything in the game).
+  They travel along friendships (and to people standing close) one hop per second,
+  weaken with every retelling, fade on their own, fade much faster when the
+  person's own eyes contradict them, and are dropped the moment the real thing
+  reaches that person, so a rumor never double-counts with the need it foretold.
+- Honest by construction, again: a rumor enters the same "why" list that makes
+  the mood, so `mood == clamp(50 + sum(why))` still holds for everyone, and the
+  People panel shows who told them, how many times it was retold, and how much
+  they believe it.
+- Switch `MIND_FLAGS.social`: with it OFF the simulation is bit-identical to
+  Phase 3a (same fingerprints). With it ON (the shipped game) there is a second,
+  reviewed baseline, `sim-fingerprints-social.json`. **What the rebaseline
+  changed:** in all 6 recorded scenarios only one field differs (the minds hash);
+  resources, deaths, unit and building counts are identical. So those scenarios
+  do not prove the rumor effect on gameplay; the effect itself is proved by the
+  `minds` social checks (mood moves, rumors die out, are dropped once real, save/
+  load keeps friendships and rumors and keeps passing them on, 0 multiplayer desyncs).
+- **Not done yet (3b-2):** nothing in the game plants rumors, so the enemy does
+  not use fear against you yet; no castle-wide morale; no surrender terms; the
+  player has no way to spread or quash a rumor. Today the layer is felt only
+  through mood (and so work speed, via 3a). Numbers are a first guess, untuned.
+
+### Not verified yet
+
+- `MindSection.tsx` has **not been seen in a browser** (no browser or React type
+  packages in the authoring environment); `tsc` shows only the usual
+  missing-@types noise for it. Please check it on screen, and run `npm ci && npm test`.
+- Balance of the mood numbers is untuned: it has been tested for direction
+  ("extra rations > no rations", "enemy nearby lowers safety") and honesty, not
+  for fun.

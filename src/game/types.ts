@@ -1,4 +1,5 @@
 // ── Castle Dominion — shared types ──────────────────────────────────────────
+import type { MindStats, MindView } from "./minds";
 
 export type Team = 0 | 1; // 0 = player (blue), 1 = enemy (red)
 export type ResKind = "wood" | "stone" | "gold" | "food";
@@ -231,6 +232,10 @@ export interface HudSnapshot {
   missionName: string;
   objectives: Array<{ label: string; done: boolean }>;
   messages: GameMessage[];
+  /** the one selected villager's mind (null unless exactly one is selected) */
+  mind: MindView | null;
+  /** village-wide mood summary for the player's team */
+  moods: MindStats;
 }
 
 export const EMPTY_SNAPSHOT: HudSnapshot = {
@@ -287,4 +292,6 @@ export const EMPTY_SNAPSHOT: HudSnapshot = {
   missionName: "",
   objectives: [],
   messages: [],
+  mind: null,
+  moods: { named: 0, avgMood: 0, unhappy: 0, desperate: 0, worst: [], rumors: [] },
 };

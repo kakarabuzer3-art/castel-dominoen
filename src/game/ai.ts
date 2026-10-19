@@ -331,7 +331,10 @@ export class AIController {
     if (
       g.popCap[team] - g.popCur[team] <= 2 &&
       res.wood >= BUILDING_DEFS.house.cost.wood! + 30 &&
-      houses.length < (g.cfg.epic ? 26 : 10)
+      // 10 houses = pop cap 68. A popular kingdom is flooded by immigrants, so a
+      // cap that low left no housing for the army in long games (the 3a mood
+      // work-speed change exposed it: matches stalled at 68/68 for 25+ minutes)
+      houses.length < (g.cfg.epic ? 26 : 18)
     ) {
       const ang = this.houseRing * 1.9 + 0.7;
       this.houseRing++;
