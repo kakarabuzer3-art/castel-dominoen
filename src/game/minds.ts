@@ -40,7 +40,23 @@ export const MIND = {
   fallenMax: 40,
   unhappyBelow: 40,
   desperateBelow: 25,
+  /** Phase 3b: most close friends / kin one person can have */
+  ties: 3,
+  /** seconds a rumor lasts when nobody keeps repeating it */
+  rumorTtl: 110,
+  /** seconds between checks that start a rumor from something real */
+  seedEvery: 10,
+  /** how many villagers standing nearby a person can pass a rumor to */
+  nearMax: 4,
 } as const;
+
+/**
+ * Switch for the whole Phase 3b social layer (ties, rumors, grief for a lost
+ * friend). It exists so the layer's effect can be PROVEN isolated: with
+ * `social = false` the simulation is bit-identical to Phase 3a (same
+ * fingerprints). Gameplay never flips it; only tests and audits do.
+ */
+export const MIND_FLAGS = { social: true };
 
 /**
  * Phase 3a — the first place a mood changes gameplay: how fast a villager works.
@@ -149,6 +165,38 @@ interface Memory {
   text: string;
 }
 
+// ── rumors (Phase 3b) ────────────────────────────────────────────────────────
+//
+// A rumor is something people say, not something that is true. Three of the
+// kinds start from a REAL condition in the world (the stores really are low;
+// the keep really was attacked) and travel along friendships faster than the
+// danger itself — so a village can panic before the hunger arrives. "panic" has
+// no basis at all: it is what a rival's whisper campaign would plant. Every
+// rumor fades, and it fades fast when the person's own eyes contradict it.
+// Once reality reaches someone, the rumor is dropped and the real cause takes
+// over — a rumor never double-counts with the need it foretold.
+
+export type RumorKind = "famine" | "raiders" | "plenty" | "panic";
+const RUMOR_KINDS: readonly RumorKind[] = ["famine", "raiders", "plenty", "panic"];
+const RUMORS: Record<RumorKind, { mag: number; text: string }> = {
+  famine: { mag: -12, text: "the food stores are almost empty" },
+  raiders: { mag: -10, text: "raiders are about to strike" },
+  plenty: { mag: 6, text: "there is food aplenty" },
+  panic: { mag: -14, text: "the keep is doomed" },
+};
+
+interface Heard {
+  k: RumorKind;
+  /** how strongly they believe it, 0..1 */
+  b: number;
+  /** who told them (-1 = they noticed it themselves) */
+  from: number;
+  fromName: string;
+  /** retellings between the source and this person (0 = firsthand) */
+  depth: number;
+  t: number;
+}
+
 // ── tuning ───────────────────────────────────────────────────────────────────
 
 /** food target by ration tier: none / half / normal / extra */
@@ -235,6 +283,20 @@ export interface MindView {
   /** the strongest reasons for the current mood, biggest first */
   why: MindWhy[];
   memories: Array<{ text: string; mag: number }>;
+  /** names of the living friends / kin this person is close to */
+  friends: string[];
+  /** what they have heard, strongest belief first */
+  rumors: RumorView[];
+}
+
+export interface RumorView {
+  text: string;
+  /** 0..100 */
+  belief: number;
+  /** who told them ("" = saw it themselves) */
+  from: string;
+  /** retellings since the source */
+  hops: number;
 }
 
 export interface MindStats {
@@ -244,6 +306,8 @@ export interface MindStats {
   desperate: number;
   /** up to three lowest moods */
   worst: Array<{ id: number; name: string; mood: number }>;
+  /** rumors currently going round, most widely held first */
+  rumors: Array<{ k: RumorKind; text: string; holders: number; belief: number }>;
 }
 
 const emptyStats = (): MindStats => ({
@@ -252,6 +316,7 @@ const emptyStats = (): MindStats => ({
   unhappy: 0,
   desperate: 0,
   worst: [],
+  rumors: [],
 });
 
 // ── internal state ───────────────────────────────────────────────────────────
@@ -276,6 +341,12 @@ interface Mind {
   t: number;
   mood: number;
   mem: Memory[];
+  /** Phase 3b: ids of close friends / kin (mutual, at most MIND.ties) */
+  ties: number[];
+  /** rumors this person has heard (at most one per kind) */
+  rum: Heard[];
+  /** named villagers standing close by at the last update (not saved) */
+  near: number[];
 }
 
 interface TeamCtx {
@@ -320,7 +391,12 @@ export class MindSystem {
     return hash2(id * 131 + salt * 7, this.mix);
   }
 
-  private create(u: Unit): Mind {
+  /** deterministic pseudo-random roll in [0,1) from three integers (never the sim RNG) */
+  private roll(a: number, b: number, c: number): number {
+    return hash2(a * 977 + b * 31 + c * 7, this.mix + 1);
+  }
+
+  private create(u: Unit, withTies = true): Mind {
     const id = u.id;
     const given = GIVEN[Math.floor(this.h(id, 1) * GIVEN.length)];
     const by = BYNAME[Math.floor(this.h(id, 2) * BYNAME.length)];
@@ -340,9 +416,37 @@ export class MindSystem {
       t: this.g.time,
       mood: 50,
       mem: [],
+      ties: [],
+      rum: [],
+      near: [],
     };
     this.minds.set(id, m);
+    if (withTies) this.bond(m);
     return m;
+  }
+
+  /**
+   * Give a newcomer up to two friends among the people already in the village
+   * (mutual; nobody ends up with more than MIND.ties). The pick is a pure
+   * function of the seed and the ids, so every peer builds the same web.
+   */
+  private bond(m: Mind): void {
+    if (!MIND_FLAGS.social) return;
+    const pool: number[] = [];
+    for (const o of this.minds.values())
+      if (o.team === m.team && o.id !== m.id && o.ties.length < MIND.ties && !m.ties.includes(o.id))
+        pool.push(o.id);
+    pool.sort((a, b) => a - b);
+    // a newcomer starts with no friends (so this behaves exactly as before), but when an
+    // old save is bonded person by person, earlier bonds may already have filled this
+    // person up: never go past the cap, never befriend the same person twice
+    for (let k = 0; k < 2 && pool.length > 0 && m.ties.length < MIND.ties; k++) {
+      const i = Math.floor(this.h(m.id, 10 + k) * pool.length);
+      const other = this.minds.get(pool.splice(i, 1)[0]);
+      if (!other) continue;
+      m.ties.push(other.id);
+      other.ties.push(m.id);
+    }
   }
 
   private has(m: Mind, id: TraitId): boolean {
@@ -358,7 +462,16 @@ export class MindSystem {
 
     this.live.clear();
     for (const u of g.units) if (u.type === "villager") this.live.set(u.id, u);
-    for (const id of [...this.minds.keys()]) if (!this.live.has(id)) this.minds.delete(id);
+    for (const id of [...this.minds.keys()]) {
+      if (this.live.has(id)) continue;
+      const gone = this.minds.get(id);
+      if (gone)
+        for (const tid of gone.ties) {
+          const p = this.minds.get(tid);
+          if (p) p.ties = p.ties.filter((x) => x !== id);
+        }
+      this.minds.delete(id);
+    }
 
     const ctx: [TeamCtx, TeamCtx] = [this.teamCtx(0, now), this.teamCtx(1, now)];
     for (const t of [0, 1] as const) {
@@ -387,7 +500,145 @@ export class MindSystem {
       }
       this.stepMind(m, u, ctx[u.team], now, fresh);
     }
+    this.social(ctx, now);
     this.recomputeStats();
+  }
+
+  // ── Phase 3b: rumors travel along friendships ─────────────────────────────
+
+  /** has this person already run into the thing the rumor warns about (or promises)? */
+  private lived(m: Mind, k: RumorKind, c: TeamCtx): boolean {
+    if (k === "famine") return c.famine || m.cause[0] === "famine";
+    if (k === "raiders")
+      return m.cause[1] === "enemyClose" || m.cause[1] === "enemyNear" || m.cause[1] === "alarm";
+    return false;
+  }
+
+  /** do this person's own eyes say the rumor is wrong? (it then fades much faster) */
+  private contradicted(m: Mind, k: RumorKind, c: TeamCtx): boolean {
+    switch (k) {
+      case "famine":
+        return !c.famine && c.stockSecs > 90 && m.needs[0] >= 60;
+      case "raiders":
+        return c.alarmAge > 60;
+      case "plenty":
+        return c.ration < 3 || c.famine;
+      case "panic":
+        return !c.famine && c.stockSecs > 90 && c.alarmAge > 60;
+    }
+  }
+
+  /** put a rumor in one person's head; returns false if they already believe it as much */
+  private hear(m: Mind, k: RumorKind, b: number, from: Mind | null, depth: number, now: number): boolean {
+    const belief = q4(clamp(b, 0, 1));
+    if (belief < 0.15) return false;
+    const e = m.rum.find((x) => x.k === k);
+    if (e) {
+      if (belief <= e.b) return false;
+      e.b = belief;
+      e.from = from ? from.id : -1;
+      e.fromName = from ? from.name : "";
+      e.depth = depth;
+      e.t = now;
+    } else {
+      m.rum.push({ k, b: belief, from: from ? from.id : -1, fromName: from ? from.name : "", depth, t: now });
+    }
+    this.refresh(m);
+    return true;
+  }
+
+  private holders(team: Team, k: RumorKind): number {
+    let n = 0;
+    for (const m of this.minds.values()) if (m.team === team && m.rum.some((e) => e.k === k)) n++;
+    return n;
+  }
+
+  /**
+   * Start a rumor with no basis in the world — what a rival's whisper campaign
+   * would do. Deterministic (the carriers are picked from the match seed and
+   * the tick), but it is NOT a recorded player command, so it must only ever be
+   * called from deterministic simulation code (e.g. the AI), never from the UI.
+   * Returns how many people now believe it.
+   */
+  plantRumor(team: Team, k: RumorKind, count = 1): number {
+    if (!MIND_FLAGS.social) return 0;
+    const ids = this.ids(team).sort((a, b) => a - b);
+    let n = 0;
+    for (let i = 0; i < count && ids.length > 0; i++) {
+      const j = Math.floor(this.roll(this.g.tickCount, 50 + i, 3) * ids.length);
+      const m = this.minds.get(ids.splice(j, 1)[0]);
+      if (m && this.hear(m, k, 0.9, null, 0, this.g.time)) n++;
+    }
+    return n;
+  }
+
+  private social(ctx: [TeamCtx, TeamCtx], now: number): void {
+    if (!MIND_FLAGS.social) return;
+    const sec = this.g.tickCount / MIND.every; // whole number: update() only runs on the second
+
+    // 1. real conditions start rumors (a couple of carriers per kind, checked every few seconds)
+    if (sec % MIND.seedEvery === 0) {
+      for (const t of [0, 1] as const) {
+        const c = ctx[t];
+        const want: Array<[RumorKind, boolean]> = [
+          ["famine", !c.famine && c.stockSecs < 75],
+          ["raiders", c.alarmAge < 40],
+          ["plenty", c.ration === 3 && !c.famine && c.stockSecs > 240],
+        ];
+        for (const [k, on] of want) {
+          if (!on || this.holders(t, k) >= 2) continue;
+          const ids = this.ids(t).sort((a, b) => a - b);
+          if (!ids.length) continue;
+          const ki = RUMOR_KINDS.indexOf(k);
+          const m = this.minds.get(ids[Math.floor(this.roll(sec, ki, 99) * ids.length)]);
+          if (m && !this.lived(m, k, c)) this.hear(m, k, 0.9, null, 0, now);
+        }
+      }
+    }
+
+    // 2. people pass on what they believe — to friends, and to whoever is standing close.
+    //    Collected first and applied after, so a rumor travels one hop per second.
+    const pend: Array<{ to: Mind; k: RumorKind; b: number; from: Mind; depth: number }> = [];
+    for (const m of this.minds.values()) {
+      if (!m.rum.length) continue;
+      const talk = this.has(m, "sociable") ? 1.5 : 1;
+      for (const e of m.rum) {
+        if (e.b < 0.3) continue;
+        const ki = RUMOR_KINDS.indexOf(e.k);
+        const n = m.ties.length + m.near.length;
+        for (let j = 0; j < n; j++) {
+          const tie = j < m.ties.length;
+          const tid = tie ? m.ties[j] : m.near[j - m.ties.length];
+          if (!tie && m.ties.includes(tid)) continue;
+          const o = this.minds.get(tid);
+          if (!o || o.team !== m.team) continue;
+          const ear = this.has(o, "stoic") ? 0.5 : this.has(o, "fearful") ? 1.4 : 1;
+          const p = Math.min(0.9, (tie ? 0.3 : 0.12) * talk * ear);
+          if (this.roll(m.id * 131 + tid, ki, sec) >= p) continue;
+          pend.push({ to: o, k: e.k, b: e.b * 0.85, from: m, depth: e.depth + 1 });
+        }
+      }
+    }
+    for (const p of pend)
+      if (!this.lived(p.to, p.k, ctx[p.to.team])) this.hear(p.to, p.k, p.b, p.from, p.depth, now);
+
+    // 3. rumors fade; the world corrects them; reality replaces them
+    for (const m of this.minds.values()) {
+      if (!m.rum.length) continue;
+      const c = ctx[m.team];
+      for (let i = m.rum.length - 1; i >= 0; i--) {
+        const e = m.rum[i];
+        if (this.lived(m, e.k, c)) {
+          m.rum.splice(i, 1);
+          continue;
+        }
+        let dec = 1 / MIND.rumorTtl;
+        if (this.contradicted(m, e.k, c)) dec += 0.04;
+        e.b = q4(e.b - dec);
+        if (e.b < 0.1) m.rum.splice(i, 1);
+      }
+      this.refresh(m);
+    }
   }
 
   private teamCtx(team: Team, now: number): TeamCtx {
@@ -438,6 +689,7 @@ export class MindSystem {
     let friends = 0;
     let guards = 0;
     const nb2 = MIND.neighbourR * MIND.neighbourR;
+    const nearIds: number[] = [];
     for (let i = 0; i < n; i++) {
       const o = this.buf[i];
       if (o.id === u.id) continue;
@@ -450,10 +702,18 @@ export class MindSystem {
           if (d < enemyD) enemyD = d;
         }
       } else if (o.type === "villager") {
-        if (d2 <= nb2) friends++;
+        if (d2 <= nb2) {
+          friends++;
+          if (MIND_FLAGS.social) nearIds.push(o.id);
+        }
       } else if (UNIT_DEFS[o.type].military) guards++;
     }
     if (enemyD > MIND.threatR) enemyD = Infinity;
+    if (MIND_FLAGS.social) {
+      // who they could pass a rumor to right now (sorted: independent of query order)
+      nearIds.sort((a, b) => a - b);
+      m.near = nearIds.length > MIND.nearMax ? nearIds.slice(0, MIND.nearMax) : nearIds;
+    }
 
     // ── food
     let ft: number;
@@ -598,12 +858,20 @@ export class MindSystem {
     if (dead) {
       this.fallen.push({ id: dead.id, team: dead.team, name: dead.name, t: now });
       if (this.fallen.length > MIND.fallenMax) this.fallen.shift();
+      // losing a friend hurts far more than seeing a stranger fall — wherever it happens
+      for (const tid of dead.ties) {
+        const p = this.minds.get(tid);
+        if (!p) continue;
+        this.remember(p, "death", -20, `Lost their friend ${dead.name}`, now);
+        p.ties = p.ties.filter((x) => x !== dead.id);
+      }
     }
     const military = UNIT_DEFS[u.type].military;
     if (!dead && !military) return;
     const r2 = MIND.witnessR * MIND.witnessR;
     for (const m of this.minds.values()) {
       if (m.id === u.id) continue;
+      if (dead && dead.ties.includes(m.id)) continue; // they already grieve for a friend
       const e = g.byId.get(m.id);
       if (!e || !("state" in e)) continue;
       const dx = e.x - u.x;
@@ -655,6 +923,19 @@ export class MindSystem {
       let d = e.mag * this.fade(e, m.t);
       if (d < 0) d *= bad;
       if (d !== 0) out.push({ label: "Memory", delta: d, text: e.text });
+    }
+    // Phase 3b: what they have heard moves their mood in proportion to how much
+    // they believe it — before (or without) the thing itself ever happening
+    for (const e of m.rum) {
+      let d = RUMORS[e.k].mag * e.b;
+      if (d < 0) d *= bad;
+      if (d === 0) continue;
+      const who = e.fromName ? `Heard from ${e.fromName} that` : "Noticed that";
+      out.push({
+        label: "Rumor",
+        delta: d,
+        text: `${who} ${RUMORS[e.k].text}${e.b < 0.45 ? " — but doubts it" : ""}`,
+      });
     }
     return out;
   }
@@ -714,7 +995,22 @@ export class MindSystem {
       .map((e) => ({ text: e.text, mag: e.mag }));
     const t0 = TRAITS[m.traits[0]];
     const t1 = TRAITS[m.traits[1]];
+    const friends: string[] = [];
+    for (const tid of m.ties) {
+      const o = this.minds.get(tid);
+      if (o) friends.push(o.name);
+    }
+    const rumors: RumorView[] = [...m.rum]
+      .sort((x, y) => y.b - x.b)
+      .map((e) => ({
+        text: RUMORS[e.k].text,
+        belief: Math.round(e.b * 100),
+        from: e.fromName,
+        hops: e.depth,
+      }));
     return {
+      friends,
+      rumors,
       id: m.id,
       name: m.name,
       mood,
@@ -761,12 +1057,29 @@ export class MindSystem {
           if (worst.length > 3) worst.pop();
         }
       }
+      const rumors: MindStats["rumors"] = [];
+      for (const k of RUMOR_KINDS) {
+        let holders = 0;
+        let belief = 0;
+        for (const m of this.minds.values()) {
+          if (m.team !== t) continue;
+          for (const e of m.rum)
+            if (e.k === k) {
+              holders++;
+              belief += e.b;
+            }
+        }
+        if (holders > 0)
+          rumors.push({ k, text: RUMORS[k].text, holders, belief: Math.round((belief / holders) * 100) });
+      }
+      rumors.sort((a, b) => b.holders - a.holders);
       this.cache[t] = {
         named,
         avgMood: named ? Math.round(sum / named) : 0,
         unhappy,
         desperate,
         worst,
+        rumors,
       };
     }
   }
@@ -778,6 +1091,10 @@ export class MindSystem {
     for (const id of ids) {
       const m = this.minds.get(id)!;
       s += `|${id},${Math.round(m.mood * 100)},${m.needs.map((x) => Math.round(x * 100)).join(".")},${m.mem.length}`;
+      // only written when present, so with the social layer off the string (and
+      // every recorded fingerprint) is exactly what Phase 3a produced
+      if (m.ties.length) s += `,t${m.ties.join(".")}`;
+      if (m.rum.length) s += `,r${m.rum.map((e) => `${e.k[0]}${Math.round(e.b * 100)}`).join(".")}`;
     }
     let h = 0x811c9dc5;
     for (let i = 0; i < s.length; i++) {
@@ -801,6 +1118,8 @@ export class MindSystem {
         m.lastHp,
         m.t,
         m.mem.map((e) => [e.k, e.t, e.mag, e.text]),
+        m.ties,
+        m.rum.map((e) => [e.k, e.b, e.from, e.fromName, e.depth, e.t]),
       ]);
     return {
       v: 1,
@@ -822,7 +1141,20 @@ export class MindSystem {
       pl?: number[];
       av?: number[];
       fallen?: Array<[number, Team, string, number]>;
-      m?: Array<[number, number[], string, number, number, number, number, Array<[string, number, number, string]>]>;
+      m?: Array<
+        [
+          number,
+          number[],
+          string,
+          number,
+          number,
+          number,
+          number,
+          Array<[string, number, number, string]>,
+          number[]?,
+          Array<[string, number, number, string, number, number]>?,
+        ]
+      >;
     } | null;
     if (!d || d.v !== 1 || !Array.isArray(d.m)) return;
     const num = (x: unknown, fb: number): number =>
@@ -838,12 +1170,13 @@ export class MindSystem {
       this.fallen.push({ id: num(f[0], -1), team: f[1] === 1 ? 1 : 0, name: f[2].slice(0, 40), t: num(f[3], 0) });
     }
     if (this.fallen.length > MIND.fallenMax) this.fallen = this.fallen.slice(-MIND.fallenMax);
+    const loadedTies = new Map<Mind, number[] | null>();
     for (const rec of d.m) {
       if (!Array.isArray(rec)) continue;
       const u = this.g.byId.get(num(rec[0], -1));
       if (!u || !("state" in u) || u.type !== "villager") continue;
       if (this.minds.size >= MIND.cap * 2) break;
-      const m = this.create(u);
+      const m = this.create(u, false); // friendships come from the save, not from bond()
       if (Array.isArray(rec[1]) && rec[1].length === 4)
         for (let i = 0; i < 4; i++) m.needs[i] = clamp(num(rec[1][i], m.needs[i]), 0, 100);
       if (typeof rec[2] === "string") {
@@ -865,8 +1198,37 @@ export class MindSystem {
           text: e[3].slice(0, 80),
         });
       }
+      for (const e of Array.isArray(rec[9]) ? rec[9] : []) {
+        if (!Array.isArray(e) || !RUMOR_KINDS.includes(e[0] as RumorKind)) continue;
+        if (m.rum.some((x) => x.k === e[0])) continue;
+        m.rum.push({
+          k: e[0] as RumorKind,
+          b: clamp(num(e[1], 0), 0, 1),
+          from: Math.floor(num(e[2], -1)),
+          fromName: typeof e[3] === "string" ? e[3].slice(0, 40) : "",
+          depth: clamp(Math.floor(num(e[4], 0)), 0, 99),
+          t: num(e[5], m.t),
+        });
+      }
+      loadedTies.set(m, Array.isArray(rec[8]) ? (rec[8] as unknown[]).map((x) => num(x, -1)) : null);
       this.refresh(m);
     }
+    // friendships: keep only mutual ties between people who exist (never trust a save)
+    const settled = new Map<Mind, number[]>();
+    for (const [m, raw] of loadedTies) {
+      const keep: number[] = [];
+      for (const tid of raw ?? []) {
+        const o = this.minds.get(tid);
+        if (!o || o.id === m.id || o.team !== m.team || keep.includes(tid)) continue;
+        if (keep.length < MIND.ties) keep.push(tid);
+      }
+      settled.set(m, keep);
+    }
+    for (const [m, keep] of settled)
+      m.ties = keep.filter((tid) => settled.get(this.minds.get(tid) as Mind)?.includes(m.id));
+    // saves from before Phase 3b have no friendships: give those people some now
+    for (const [m, raw] of loadedTies) if (raw === null) this.bond(m);
+    for (const m of this.minds.values()) this.refresh(m);
     this.recomputeStats();
     if (Array.isArray(d.av) && d.av.length === 2) {
       this.cache[0].avgMood = clamp(num(d.av[0], this.cache[0].avgMood), 0, 100);

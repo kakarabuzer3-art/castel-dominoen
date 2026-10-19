@@ -83,7 +83,8 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
 | 2 — minds v1 (named villagers) | done, pushed on `phase-2-minds` — see below |
 | 3a — first gameplay effect: mood sets work speed | done on branch `phase-3a-morale-work` — see below |
 | 1 — 3D look (postprocessing, glTF models) | **not started**: needs `npm install` of new packages and a real browser to judge the result |
-| 3b — rumor and morale (social ties, rumors, surrender terms) | next |
+| 3b-1 — friendships and rumors | done on branch `phase-3b-rumors` — see below |
+| 3b-2 — the enemy uses fear (AI whisper campaigns), morale of the whole castle, surrender terms | **next**; not started |
 
 ### Phase 2 — what exists
 
@@ -135,6 +136,38 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
 - Not tuned for fun: the numbers are a first guess. Against a scripted bot the
   AI now wins long games it used to stall on; whether that feels fair to a human
   needs real playtesting.
+
+### Phase 3b-1 — friendships and rumors
+
+- Every named villager gets up to two friends or kin at arrival (mutual, nobody
+  has more than 3; the pick is a pure function of seed and ids). When someone
+  dies, their friends lose a living tie and remember it by name ("Lost their
+  friend ..."): a friend is hurt more than a stranger who only saw it happen
+  (test: friend -14 vs stranger -10).
+- Rumors are things people *say*, not things that are true. Three start from a
+  real condition (stores running low, the keep recently attacked, a long stretch
+  of full rations); `panic` has no basis at all — it is the seed a rival's
+  whisper campaign would plant (`plantRumor`, not yet used by anything in the game).
+  They travel along friendships (and to people standing close) one hop per second,
+  weaken with every retelling, fade on their own, fade much faster when the
+  person's own eyes contradict them, and are dropped the moment the real thing
+  reaches that person, so a rumor never double-counts with the need it foretold.
+- Honest by construction, again: a rumor enters the same "why" list that makes
+  the mood, so `mood == clamp(50 + sum(why))` still holds for everyone, and the
+  People panel shows who told them, how many times it was retold, and how much
+  they believe it.
+- Switch `MIND_FLAGS.social`: with it OFF the simulation is bit-identical to
+  Phase 3a (same fingerprints). With it ON (the shipped game) there is a second,
+  reviewed baseline, `sim-fingerprints-social.json`. **What the rebaseline
+  changed:** in all 6 recorded scenarios only one field differs (the minds hash);
+  resources, deaths, unit and building counts are identical. So those scenarios
+  do not prove the rumor effect on gameplay; the effect itself is proved by the
+  `minds` social checks (mood moves, rumors die out, are dropped once real, save/
+  load keeps friendships and rumors and keeps passing them on, 0 multiplayer desyncs).
+- **Not done yet (3b-2):** nothing in the game plants rumors, so the enemy does
+  not use fear against you yet; no castle-wide morale; no surrender terms; the
+  player has no way to spread or quash a rumor. Today the layer is felt only
+  through mood (and so work speed, via 3a). Numbers are a first guess, untuned.
 
 ### Not verified yet
 

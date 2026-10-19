@@ -106,6 +106,27 @@ export const MindSection = memo(
               ))}
             </div>
           )}
+          {m.friends.length > 0 && (
+            <div className="text-[9.5px] text-[#8a7a58] leading-snug mt-1" data-testid="mind-friends">
+              <span className="text-[#c4a86e]">Close to:</span> {m.friends.join(", ")}
+            </div>
+          )}
+          {m.rumors.length > 0 && (
+            <div className="mt-1" data-testid="mind-rumors">
+              <div className="text-[9px] uppercase tracking-wider text-[#c4a86e] mb-[2px]">
+                What they have heard
+              </div>
+              {m.rumors.map((r, i) => (
+                <div key={`${r.text}-${i}`} className="text-[9.5px] text-[#8a7a58] leading-snug">
+                  “{r.text}” —{" "}
+                  {r.from
+                    ? `from ${r.from}${r.hops > 1 ? `, retold ${r.hops} times` : ""}`
+                    : "noticed it themselves"}
+                  , believes it {r.belief}%
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       );
     }
@@ -136,6 +157,12 @@ export const MindSection = memo(
               .filter((p) => p.mood < 55)
               .map((p) => `${p.name} (${p.mood})`)
               .join(", ")}
+          </div>
+        )}
+        {v.rumors.length > 0 && (
+          <div className="text-[9.5px] text-[#8a7a58] leading-snug mt-1" data-testid="mind-village-rumors">
+            <span className="text-[#c4a86e]">Whispers in the village:</span>{" "}
+            {v.rumors.map((r) => `“${r.text}” (${r.holders} believe it)`).join("; ")}
           </div>
         )}
         <div className="text-[9px] text-[#6f5f3f] mt-1 leading-snug">

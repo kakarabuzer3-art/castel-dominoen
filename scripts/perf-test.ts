@@ -19,6 +19,7 @@ import {
   type MatchConfig,
 } from "../src/game/constants";
 import { Game } from "../src/game/engine";
+import { MIND_FLAGS } from "../src/game/minds";
 import { PerfGovernor, TIER_FX, tierFromQuality } from "../src/game/perf";
 
 let fails = 0;
@@ -144,8 +145,15 @@ function runScale(
 }
 
 console.log("\n=== 1. behaviour preservation (recorded pre-optimisation fingerprints) ===");
-{
-  const fxPath = fileURLToPath(new URL("./fixtures/sim-fingerprints.json", import.meta.url));
+// Two recorded baselines. With the Phase 3b social layer OFF the simulation must
+// still be bit-identical to Phase 3a; with it ON (the shipped game) it must match
+// the reviewed Phase 3b baseline. Neither may drift by accident.
+for (const mode of [
+  { label: "Phase 3a baseline, social layer OFF", flag: false, file: "sim-fingerprints.json" },
+  { label: "Phase 3b baseline, social layer ON", flag: true, file: "sim-fingerprints-social.json" },
+]) {
+  MIND_FLAGS.social = mode.flag;
+  const fxPath = fileURLToPath(new URL(`./fixtures/${mode.file}`, import.meta.url));
   const fx = JSON.parse(readFileSync(fxPath, "utf8")) as Record<string, string>;
   // re-run the exact configs the fixture was recorded from
   const cases: Array<[string, MatchConfig, number, number, boolean]> = [
@@ -185,11 +193,12 @@ console.log("\n=== 1. behaviour preservation (recorded pre-optimisation fingerpr
     else diffs.push(`${id}\n      want ${fx[id]}\n      got  ${fp}`);
   }
   check(
-    "non-epic sim fingerprints identical to the recorded baseline",
+    `non-epic sim fingerprints identical to the ${mode.label}`,
     diffs.length === 0 && same === cases.length,
     `${same}/${cases.length} identical${diffs.length ? `\n      ${diffs[0]}` : ""}`,
   );
 }
+MIND_FLAGS.social = true; // the shipped default for everything below
 
 console.log("\n=== 2. popRatePerMin() must equal sum(popFactors()) exactly ===");
 {

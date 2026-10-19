@@ -10,7 +10,7 @@
  */
 import { defaultMatchConfig, type MatchConfig } from "../src/game/constants";
 import { Game } from "../src/game/engine";
-import { MIND, WORK, moodLabel, workFromMood } from "../src/game/minds";
+import { MIND, MIND_FLAGS, WORK, moodLabel, workFromMood } from "../src/game/minds";
 import type { Unit } from "../src/game/types";
 
 let fails = 0;
@@ -251,7 +251,12 @@ console.log("== reactions ==");
   const ids = g.minds.ids(0);
   const victim = g.units.find((u) => u.id === ids[0])!;
   const vName = g.minds.viewOf(victim.id)!.name;
-  const witness = ids.slice(1).map((id) => g.units.find((u) => u.id === id)!).find((u) => Math.hypot(u.x - victim.x, u.y - victim.y) < MIND.witnessR)!;
+  // a stranger: friends of the victim grieve a *friend* (tested in section 7), not a sight
+  const vFriends = g.minds.viewOf(victim.id)!.friends;
+  const witness = ids
+    .slice(1)
+    .map((id) => g.units.find((u) => u.id === id)!)
+    .find((u) => Math.hypot(u.x - victim.x, u.y - victim.y) < MIND.witnessR && !vFriends.includes(g.minds.viewOf(u.id)!.name))!;
   const before = g.minds.viewOf(witness.id)!.mood;
   victim.hp = 0;
   g.step(2);
@@ -299,6 +304,198 @@ console.log("== persistence ==");
     }
   }
   check("garbage mind data never throws", !threw);
+}
+
+// ── 7. social layer (Phase 3b): friendships, rumors, grief for a friend ──────
+console.log("== social layer ==");
+type Inner = { minds: Map<number, { id: number; team: number; ties: number[] }> };
+const inner = (g: Game) => (g.minds as unknown as Inner).minds;
+const RUMOR_TEXT: Record<string, string> = {
+  famine: "the food stores are almost empty",
+  raiders: "raiders are about to strike",
+  plenty: "there is food aplenty",
+  panic: "the keep is doomed",
+};
+// counted from each person's own view (the stats cache only refreshes on the next update)
+const holders = (g: Game, kind: string): number =>
+  g.minds.ids(0).filter((id) => g.minds.viewOf(id)!.rumors.some((r) => r.text === RUMOR_TEXT[kind])).length;
+const clampTo = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+{
+  // friendships: mutual, same team, never more than MIND.ties
+  const g = mk(301);
+  crowd(g, 40);
+  g.step(5);
+  const all = inner(g);
+  let mutual = true;
+  let capped = true;
+  let sameTeam = true;
+  let withFriend = 0;
+  for (const m of all.values()) {
+    if (m.ties.length > MIND.ties) capped = false;
+    if (m.ties.length > 0) withFriend++;
+    for (const tid of m.ties) {
+      const o = all.get(tid);
+      if (!o || !o.ties.includes(m.id)) mutual = false;
+      if (o && o.team !== m.team) sameTeam = false;
+    }
+  }
+  check("friendships are mutual", mutual);
+  check(`nobody has more than ${MIND.ties} close friends`, capped);
+  check("friends are always on the same team", sameTeam);
+  check("most people have at least one friend", withFriend >= all.size * 0.7, `${withFriend}/${all.size}`);
+}
+{
+  // a rumor spreads along friendships and moves mood — causally
+  const a = mk(302);
+  const b = mk(302); // control: identical village, nobody whispers
+  for (const g of [a, b]) {
+    crowd(g, 40);
+    g.step(5);
+  }
+  const planted = a.minds.plantRumor(0, "panic", 1);
+  check("a planted rumor reaches exactly one person at first", planted === 1 && holders(a, "panic") === 1);
+  // the village sees nothing wrong (stores full, no attack), so this rumor is short-lived:
+  // watch it second by second and measure it at its widest
+  let peak = 0;
+  let peakAt = 0;
+  let heard: number[] = [];
+  for (let s = 1; s <= 14; s++) {
+    a.step(1);
+    b.step(1);
+    const h = holders(a, "panic");
+    if (h > peak) {
+      peak = h;
+      peakAt = s;
+      heard = a.minds.ids(0).filter((id) => a.minds.viewOf(id)!.rumors.length > 0);
+    }
+  }
+  check("…and spreads through the village", peak >= 3 && peak <= a.minds.count(0), `${peak} of ${a.minds.count(0)} believed it at the widest (after ${peakAt} s)`);
+  // measure the mood effect at that same moment in both villages
+  const a2 = mk(302);
+  const b2 = mk(302);
+  for (const g of [a2, b2]) {
+    crowd(g, 40);
+    g.step(5);
+  }
+  a2.minds.plantRumor(0, "panic", 1);
+  a2.step(peakAt);
+  b2.step(peakAt);
+  const heard2 = a2.minds.ids(0).filter((id) => a2.minds.viewOf(id)!.rumors.length > 0);
+  const diff = mean(heard2.map((id) => b2.minds.viewOf(id)!.mood - a2.minds.viewOf(id)!.mood));
+  check("people who heard it are measurably less happy than in the control village", heard2.length >= 3 && diff > 2, `${heard2.length} people, mood -${diff.toFixed(1)} on average`);
+  const retold = heard2.map((id) => a2.minds.viewOf(id)!).flatMap((v) => v.rumors).find((r) => r.hops >= 1);
+  check("a retold rumor remembers who told them and how many times it was retold", !!retold && retold.from !== "", JSON.stringify(retold));
+  heard = heard2;
+  // honesty: the rumor shows up in the explanation and the total still adds up
+  let honest = true;
+  let named = false;
+  for (const id of heard) {
+    const ex = a2.minds.explain(id)!;
+    const sum = ex.factors.reduce((s, f) => s + f.delta, 0);
+    if (Math.abs(clampTo(50 + sum, 0, 100) - ex.mood) > 1e-9) honest = false;
+    if (ex.factors.some((f) => f.label === "Rumor" && f.text.includes("the keep is doomed"))) named = true;
+  }
+  check("the explanation names the rumor", named);
+  check("mood == clamp(50 + sum(why)) still holds for everyone who heard a rumor", honest, `${heard.length} people`);
+  // rumors fade on their own
+  a.step(240);
+  check("with nothing to feed it, the rumor dies out", holders(a, "panic") === 0, `${holders(a, "panic")} still repeating it`);
+}
+{
+  // reality replaces the rumor instead of double-counting with it
+  const g = mk(303);
+  crowd(g, 20);
+  g.step(5);
+  g.minds.plantRumor(0, "raiders", 1);
+  const who = g.minds.ids(0).find((id) => g.minds.viewOf(id)!.rumors.some((r) => r.text.includes("raiders")))!;
+  check("(setup) one person has heard raiders are coming", who !== undefined);
+  g.alarm[0] = g.time; // a building really was just attacked
+  g.step(3);
+  const v = g.minds.viewOf(who)!;
+  const ex = g.minds.explain(who)!;
+  check("once the danger is real the rumor about it is dropped", !v.rumors.some((r) => r.text.includes("raiders")), JSON.stringify(v.rumors));
+  check("…so the mood is explained by the real alarm, not counted twice", !ex.factors.some((f) => f.label === "Rumor" && f.text.includes("raiders")));
+}
+{
+  // losing a friend hurts more than watching a stranger fall
+  const g = mk(304);
+  crowd(g, 30);
+  g.step(5);
+  const all = inner(g);
+  const victimId = [...all.values()].find((m) => m.team === 0 && m.ties.length >= 1)!.id;
+  const victim = g.units.find((u) => u.id === victimId)!;
+  const vName = g.minds.viewOf(victimId)!.name;
+  const friendId = all.get(victimId)!.ties[0];
+  const friendBefore = g.minds.viewOf(friendId)!;
+  check("(setup) the friend lists the victim by name", friendBefore.friends.includes(vName));
+  const stranger = [...all.values()].find(
+    (m) => m.team === 0 && m.id !== victimId && !all.get(victimId)!.ties.includes(m.id) && g.units.some((u) => u.id === m.id && Math.hypot(u.x - victim.x, u.y - victim.y) < MIND.witnessR),
+  );
+  const strangerBefore = stranger ? g.minds.viewOf(stranger.id)!.mood : NaN;
+  victim.hp = 0;
+  g.step(2);
+  const fa = g.minds.viewOf(friendId)!;
+  check("the friend remembers losing them by name", fa.memories.some((m) => m.text === `Lost their friend ${vName}`), fa.memories.map((m) => m.text).join("; "));
+  check("…and no longer counts them as a living friend", !fa.friends.includes(vName));
+  check("…and is far less happy than before", fa.mood < friendBefore.mood - 5, `${friendBefore.mood} -> ${fa.mood}`);
+  if (stranger) {
+    const sa = g.minds.viewOf(stranger.id)!;
+    check("a stranger who merely saw it is hurt less than the friend", friendBefore.mood - fa.mood > strangerBefore - sa.mood, `friend -${friendBefore.mood - fa.mood}, stranger -${strangerBefore - sa.mood}`);
+  }
+}
+{
+  // determinism, persistence, compatibility
+  const run = (): Game => {
+    const g = mk(305);
+    crowd(g, 40);
+    g.step(5);
+    g.minds.plantRumor(0, "famine", 2);
+    g.step(40);
+    return g;
+  };
+  const a = run();
+  const b = run();
+  check("social layer is deterministic (same seed -> identical mind fingerprint)", a.minds.hash() === b.minds.hash());
+  check("…and identical simulation hash", a.stateHash() === b.stateHash());
+
+  const g2 = new Game(null, 1);
+  check("a save with friendships and rumors loads", g2.loadFrom(a.serialize()));
+  check("save/load: identical mind fingerprint (ties + rumors included)", a.minds.hash() === g2.minds.hash());
+  let same = true;
+  for (const id of a.minds.ids(0)) {
+    const x = a.minds.viewOf(id);
+    const y = g2.minds.viewOf(id);
+    if (!x || !y || x.friends.join() !== y.friends.join() || JSON.stringify(x.rumors) !== JSON.stringify(y.rumors)) same = false;
+  }
+  check("save/load: same friends and same rumors for everyone", same, `${a.minds.count(0)} people`);
+  check("save/load: the rumor is still being passed on after loading", holders(g2, "famine") === holders(a, "famine"), `${holders(g2, "famine")} holders`);
+
+  // a Phase 3a save (minds without friends/rumors) still loads, with no friendships
+  const old = JSON.parse(a.serialize()) as { minds: { m: unknown[][] } };
+  old.minds.m = old.minds.m.map((r) => r.slice(0, 8));
+  const g3 = new Game(null, 1);
+  check("a Phase 3a save (no friendships) still loads", g3.loadFrom(JSON.stringify(old)));
+  check("…nobody holds a rumor, and the old villagers are given friendships on load", g3.minds.ids(0).every((id) => g3.minds.viewOf(id)!.rumors.length === 0) && g3.minds.ids(0).some((id) => g3.minds.viewOf(id)!.friends.length > 0));
+  const m3 = inner(g3);
+  let ok3 = true;
+  for (const m of m3.values()) {
+    if (m.ties.length > MIND.ties) ok3 = false;
+    for (const tid of m.ties) if (!m3.get(tid)?.ties.includes(m.id)) ok3 = false;
+  }
+  check("…and those friendships are mutual and within the cap", ok3);
+}
+{
+  // the switch: off means no friendships, no rumors, nothing planted
+  MIND_FLAGS.social = false;
+  const g = mk(306);
+  crowd(g, 30);
+  g.step(5);
+  const planted = g.minds.plantRumor(0, "panic", 3);
+  g.step(20);
+  const noTies = g.minds.ids(0).every((id) => g.minds.viewOf(id)!.friends.length === 0);
+  const noRumors = g.minds.ids(0).every((id) => g.minds.viewOf(id)!.rumors.length === 0);
+  MIND_FLAGS.social = true;
+  check("social layer OFF: no friendships, no rumors, plantRumor does nothing", planted === 0 && noTies && noRumors);
 }
 
 // ── 6. caps + cost ───────────────────────────────────────────────────────────
