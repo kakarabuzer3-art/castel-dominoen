@@ -56,7 +56,58 @@ export const MIND = {
  * `social = false` the simulation is bit-identical to Phase 3a (same
  * fingerprints). Gameplay never flips it; only tests and audits do.
  */
-export const MIND_FLAGS = { social: true };
+export const MIND_FLAGS = { social: true, will: true };
+
+/**
+ * Phase 3b-2 (castle will, decrees, yielding). Needs the social layer (it is
+ * built from rumors), and with it OFF the simulation is bit-identical to 3b-1.
+ */
+export const willOn = (): boolean => MIND_FLAGS.social && MIND_FLAGS.will;
+
+/**
+ * A castle can fall without its keep being destroyed: when its people lose
+ * heart *while an enemy army stands at its gates*, and stay that way, they open
+ * the gates. It is telegraphed (wavering -> breaking -> a visible countdown) and
+ * the same rule binds both sides. Skirmish only: campaign missions, sandbox and
+ * survival have their own win conditions.
+ */
+export const WILL = {
+  /** resolve (0..100) at or below which a besieged castle is "breaking" */
+  breakBelow: 25,
+  /** below this the castle is "wavering" (a warning, nothing more) */
+  waverBelow: 40,
+  /** seconds a castle must stay breaking *and* besieged before it yields */
+  yieldAfter: 60,
+  /** soldiers this close (px) to the keep are "at the gates" */
+  siegeR: 512,
+  /**
+   * A siege is an army, not a raider: at least this many enemy soldiers at the
+   * gates, AND more of them than your own garrison there. A lone knight must
+   * not decide a game, and a keep whose gate is held is not besieged.
+   */
+  siegeMin: 3,
+  /** fewer named people than this and the castle's will is not judged at all */
+  minNamed: 8,
+  /** resolve = average mood - desperatePen * (share desperate) - unhappyPen * (share unhappy) */
+  desperatePen: 25,
+  unhappyPen: 10,
+} as const;
+
+export type DecreeKind = "reassure" | "whisper";
+export const DECREE_KINDS: readonly DecreeKind[] = ["reassure", "whisper"];
+
+/**
+ * Two orders either lord can give (the AI pays the same gold and obeys the same
+ * cooldowns as the player — it gets no shortcut):
+ *  - reassure: address your own people. Every negative rumor they hold loses
+ *    most of its grip, and they remember the lord's word for a while.
+ *  - whisper: have agents plant the rumor "the keep is doomed" among the
+ *    enemy's people. It has no basis in fact; it spreads, then fades.
+ */
+export const DECREE = {
+  reassure: { gold: 40, cd: 60, belief: 0.4, cheer: 8, text: "Heard the lord's word" },
+  whisper: { gold: 60, cd: 90, carriers: 2 },
+} as const;
 
 /**
  * Phase 3a — the first place a mood changes gameplay: how fast a villager works.
@@ -153,8 +204,8 @@ const BYNAME = [
 
 // ── memories ─────────────────────────────────────────────────────────────────
 
-type MemKind = "death" | "wounded" | "hunger" | "blessing" | "plenty" | "victory";
-const MEM_KINDS: readonly MemKind[] = ["death", "wounded", "hunger", "blessing", "plenty", "victory"];
+type MemKind = "death" | "wounded" | "hunger" | "blessing" | "plenty" | "victory" | "word";
+const MEM_KINDS: readonly MemKind[] = ["death", "wounded", "hunger", "blessing", "plenty", "victory", "word"];
 
 interface Memory {
   k: MemKind;
@@ -308,6 +359,13 @@ export interface MindStats {
   worst: Array<{ id: number; name: string; mood: number }>;
   /** rumors currently going round, most widely held first */
   rumors: Array<{ k: RumorKind; text: string; holders: number; belief: number }>;
+  /** Phase 3b-2: the castle's will, 0..100 (see WILL); equals avgMood when too few people to judge */
+  resolve: number;
+  will: "steady" | "wavering" | "breaking";
+  /** seconds until the gates open if nothing changes; -1 = not happening */
+  yieldIn: number;
+  /** seconds until each decree can be given again (0 = ready) */
+  decree: { reassure: number; whisper: number };
 }
 
 const emptyStats = (): MindStats => ({
@@ -317,6 +375,10 @@ const emptyStats = (): MindStats => ({
   desperate: 0,
   worst: [],
   rumors: [],
+  resolve: 0,
+  will: "steady",
+  yieldIn: -1,
+  decree: { reassure: 0, whisper: 0 },
 });
 
 // ── internal state ───────────────────────────────────────────────────────────
@@ -371,6 +433,24 @@ export class MindSystem {
   private plentyT: [number, number] = [0, 0];
   private fallen: Array<{ id: number; team: Team; name: string; t: number }> = [];
   private cache: [MindStats, MindStats] = [emptyStats(), emptyStats()];
+  /** Phase 3b-2: seconds each castle has been breaking while besieged */
+  private breakT: [number, number] = [0, 0];
+  /** game-time at which each decree can be given again: [team][DECREE_KINDS index] */
+  private readyAt: [[number, number], [number, number]] = [
+    [0, 0],
+    [0, 0],
+  ];
+  /** decrees queued but not yet carried out, [team][kind] (see queueDecree) */
+  private pendD: [[number, number], [number, number]] = [
+    [0, 0],
+    [0, 0],
+  ];
+  /** decrees given so far per team; seeds who carries a whisper, independent of the tick */
+  private decreeN: [number, number] = [0, 0];
+  /** a castle that has just yielded (-1 none); the engine takes it exactly once */
+  private yielded: -1 | 0 | 1 = -1;
+  /** last announced will state per team (messages only; not saved) */
+  private lastWill: [string, string] = ["steady", "steady"];
 
   constructor(private g: Game) {}
 
@@ -383,6 +463,18 @@ export class MindSystem {
     this.plentyT = [0, 0];
     this.fallen = [];
     this.cache = [emptyStats(), emptyStats()];
+    this.breakT = [0, 0];
+    this.readyAt = [
+      [0, 0],
+      [0, 0],
+    ];
+    this.decreeN = [0, 0];
+    this.pendD = [
+      [0, 0],
+      [0, 0],
+    ];
+    this.yielded = -1;
+    this.lastWill = ["steady", "steady"];
   }
 
   // ── identity (pure functions of seed + unit id) ────────────────────────────
@@ -500,8 +592,148 @@ export class MindSystem {
       }
       this.stepMind(m, u, ctx[u.team], now, fresh);
     }
+    if (willOn()) this.runDecrees(now);
     this.social(ctx, now);
     this.recomputeStats();
+    this.willStep();
+  }
+
+  // ── Phase 3b-2: the castle's will ──────────────────────────────────────────
+
+  /**
+   * Is this team's keep under siege? (an army at the gates, not a bad harvest
+   * and not a lone raider): at least WILL.siegeMin enemy soldiers within
+   * WILL.siegeR of the keep, and more of them than the team's own soldiers there.
+   */
+  private besieged(team: Team): boolean {
+    const g = this.g;
+    const keep = g.buildingById.get(g.keeps[team]);
+    if (!keep) return false;
+    const kx = (keep.tx + keep.w / 2) * 32;
+    const ky = (keep.ty + keep.h / 2) * 32;
+    const r2 = WILL.siegeR * WILL.siegeR;
+    let foes = 0;
+    let own = 0;
+    for (const u of g.units) {
+      if (!UNIT_DEFS[u.type].military) continue;
+      const dx = u.x - kx;
+      const dy = u.y - ky;
+      if (dx * dx + dy * dy > r2) continue;
+      if (u.team === team) own++;
+      else foes++;
+    }
+    return foes >= WILL.siegeMin && foes > own;
+  }
+
+  /**
+   * Once a second, after the stats: judge each castle's will and run the yield
+   * clock. The clock only runs while the castle is breaking AND besieged, and it
+   * drains twice as fast as it fills, so relief (food, a victory, a decree, the
+   * enemy pulling back) always buys time. Both sides obey the same rule.
+   */
+  private willStep(): void {
+    if (!willOn()) return;
+    const g = this.g;
+    const live = g.phase === "playing" && g.cfg.mode === "skirmish";
+    for (const t of [0, 1] as const) {
+      const s = this.cache[t];
+      if (live && s.will === "breaking" && this.besieged(t)) this.breakT[t] += 1;
+      else this.breakT[t] = Math.max(0, this.breakT[t] - 2);
+      s.yieldIn = this.breakT[t] > 0 ? Math.max(0, WILL.yieldAfter - this.breakT[t]) : -1;
+      if (g.isMine(t) && s.will !== this.lastWill[t]) {
+        if (s.will === "wavering") g.msg("Your people are wavering — lift their spirits.", "bad");
+        else if (s.will === "breaking") g.msg("Your people are losing heart! Relieve them before the gates open.", "bad");
+        else if (this.lastWill[t] !== "steady") g.msg("Your people have found their courage again.", "good");
+      }
+      this.lastWill[t] = s.will;
+    }
+    if (this.yielded === -1) {
+      const a = this.breakT[0] >= WILL.yieldAfter;
+      const b = this.breakT[1] >= WILL.yieldAfter;
+      if (a && b) this.yielded = this.cache[0].resolve < this.cache[1].resolve ? 0 : 1;
+      else if (a) this.yielded = 0;
+      else if (b) this.yielded = 1;
+    }
+  }
+
+  /** the castle that just yielded (-1 if none); returns it once, then forgets it */
+  takeYield(): -1 | 0 | 1 {
+    const y = this.yielded;
+    this.yielded = -1;
+    return y;
+  }
+
+  /**
+   * Seconds the team must wait before giving this decree again (0 = ready now).
+   * A decree that is queued but not yet carried out counts as "1": the person is
+   * already acting on it.
+   */
+  decreeWait(team: Team, kind: DecreeKind): number {
+    const i = DECREE_KINDS.indexOf(kind);
+    if (this.pendD[team][i]) return 1;
+    const w = this.readyAt[team][i] - this.g.time;
+    return w > 0 ? Math.ceil(w) : 0;
+  }
+
+  /**
+   * Queue a decree. Its effect is carried out inside the next whole-second mind
+   * update (see runDecrees), NOT now: orders reach the simulation between ticks
+   * (and a replay applies them one tick later), but the update runs at a fixed
+   * tick in both, so timestamps, memories and the cooldown clock come out
+   * bit-identical. The engine has already taken the gold.
+   * Returns false (and does nothing) if the order cannot be given right now.
+   */
+  queueDecree(team: Team, kind: DecreeKind): boolean {
+    if (!willOn() || this.decreeWait(team, kind) > 0) return false;
+    const target = kind === "reassure" ? team : ((1 - team) as Team);
+    if (this.count(target) === 0) return false; // nobody to reach
+    this.pendD[team][DECREE_KINDS.indexOf(kind)] = 1;
+    return true;
+  }
+
+  /** carry out every queued decree (called from update(), on the second) */
+  private runDecrees(now: number): void {
+    for (const team of [0, 1] as const) {
+      for (let i = 0; i < DECREE_KINDS.length; i++) {
+        if (!this.pendD[team][i]) continue;
+        this.pendD[team][i] = 0;
+        const kind = DECREE_KINDS[i];
+        let reached = 0;
+        if (kind === "reassure") {
+          for (const m of this.minds.values()) {
+            if (m.team !== team) continue;
+            reached++;
+            for (let k = m.rum.length - 1; k >= 0; k--) {
+              if (RUMORS[m.rum[k].k].mag >= 0) continue;
+              m.rum[k].b = q4(m.rum[k].b * DECREE.reassure.belief);
+              if (m.rum[k].b < 0.1) m.rum.splice(k, 1);
+            }
+            this.remember(m, "word", DECREE.reassure.cheer, DECREE.reassure.text, now);
+          }
+          if (this.g.isMine(team)) this.g.msg("You address your people: the whispers lose their grip.", "good");
+        } else {
+          // the carriers are picked from the seed and a per-team counter, never the tick
+          const foe = (1 - team) as Team;
+          const ids = this.ids(foe).sort((a, b) => a - b);
+          for (let k = 0; k < DECREE.whisper.carriers && ids.length > 0; k++) {
+            const j = Math.floor(this.roll(this.decreeN[team], 70 + k, 5 + team) * ids.length);
+            const m = this.minds.get(ids.splice(j, 1)[0]);
+            if (m && this.hear(m, "panic", 0.9, null, 0, now)) reached++;
+          }
+          if (this.g.isMine(team))
+            this.g.msg(
+              reached > 0
+                ? `Your agents plant the whisper: ${reached} villager${reached > 1 ? "s" : ""} now believe the keep is doomed.`
+                : "Your agents found the enemy's people already whispering.",
+              "info",
+            );
+          else if (this.g.isMine(foe) && reached > 0)
+            this.g.msg("Strange whispers are going round your village…", "bad");
+        }
+        this.decreeN[team]++;
+        this.readyAt[team][i] = now + DECREE[kind].cd;
+      }
+    }
   }
 
   // ── Phase 3b: rumors travel along friendships ─────────────────────────────
@@ -1073,6 +1305,24 @@ export class MindSystem {
           rumors.push({ k, text: RUMORS[k].text, holders, belief: Math.round((belief / holders) * 100) });
       }
       rumors.sort((a, b) => b.holders - a.holders);
+      // the castle's will: how its people feel on average, pulled down by the
+      // share that are miserable or desperate. Too few people to judge -> plain average.
+      const avg = named ? sum / named : 0;
+      const judged = willOn() && named >= WILL.minNamed;
+      const resolve = judged
+        ? clamp(
+            Math.round(avg - WILL.desperatePen * (desperate / named) - WILL.unhappyPen * (unhappy / named)),
+            0,
+            100,
+          )
+        : Math.round(avg);
+      const will: MindStats["will"] = !judged
+        ? "steady"
+        : resolve <= WILL.breakBelow
+          ? "breaking"
+          : resolve < WILL.waverBelow
+            ? "wavering"
+            : "steady";
       this.cache[t] = {
         named,
         avgMood: named ? Math.round(sum / named) : 0,
@@ -1080,6 +1330,13 @@ export class MindSystem {
         desperate,
         worst,
         rumors,
+        resolve,
+        will,
+        yieldIn: this.breakT[t] > 0 ? Math.max(0, WILL.yieldAfter - this.breakT[t]) : -1,
+        decree: {
+          reassure: this.decreeWait(t, "reassure"),
+          whisper: this.decreeWait(t, "whisper"),
+        },
       };
     }
   }
@@ -1095,6 +1352,15 @@ export class MindSystem {
       // every recorded fingerprint) is exactly what Phase 3a produced
       if (m.ties.length) s += `,t${m.ties.join(".")}`;
       if (m.rum.length) s += `,r${m.rum.map((e) => `${e.k[0]}${Math.round(e.b * 100)}`).join(".")}`;
+    }
+    // Phase 3b-2 state, written only once it exists so that with the layer off (or
+    // before anything happened) the string is exactly what 3b-1 produced
+    if (willOn()) {
+      if (this.breakT[0] || this.breakT[1]) s += `|b${this.breakT[0]}.${this.breakT[1]}`;
+      if (this.pendD[0][0] || this.pendD[0][1] || this.pendD[1][0] || this.pendD[1][1])
+        s += `|q${this.pendD[0].join("")}${this.pendD[1].join("")}`;
+      if (this.decreeN[0] || this.decreeN[1])
+        s += `|d${this.decreeN[0]}.${this.decreeN[1]}.${this.readyAt[0].map((x) => Math.round(x * 100)).join(",")}.${this.readyAt[1].map((x) => Math.round(x * 100)).join(",")}`;
     }
     let h = 0x811c9dc5;
     for (let i = 0; i < s.length; i++) {
@@ -1129,6 +1395,8 @@ export class MindSystem {
       // must come back exactly (memories can change a mood between updates)
       av: [this.cache[0].avgMood, this.cache[1].avgMood],
       fallen: this.fallen.map((f) => [f.id, f.team, f.name, f.t]),
+      // Phase 3b-2: yield clocks, decree cooldowns and counters
+      wl: { b: this.breakT, r: this.readyAt, n: this.decreeN, p: this.pendD },
       m: out,
     };
   }
@@ -1141,6 +1409,7 @@ export class MindSystem {
       pl?: number[];
       av?: number[];
       fallen?: Array<[number, Team, string, number]>;
+      wl?: { b?: number[]; r?: number[][]; n?: number[]; p?: number[][] };
       m?: Array<
         [
           number,
@@ -1164,6 +1433,38 @@ export class MindSystem {
       this.shrinesSeen = [num(d.sh[0], -1), num(d.sh[1], -1)];
     if (Array.isArray(d.pl) && d.pl.length === 2)
       this.plentyT = [num(d.pl[0], 0), num(d.pl[1], 0)];
+    // Phase 3b-2 state (absent in older saves -> starts fresh); never trust a save
+    this.breakT = [0, 0];
+    this.readyAt = [
+      [0, 0],
+      [0, 0],
+    ];
+    this.decreeN = [0, 0];
+    this.pendD = [
+      [0, 0],
+      [0, 0],
+    ];
+    this.yielded = -1;
+    this.lastWill = ["steady", "steady"];
+    if (d.wl && typeof d.wl === "object") {
+      const w = d.wl;
+      if (Array.isArray(w.b) && w.b.length === 2)
+        this.breakT = [clamp(num(w.b[0], 0), 0, 600), clamp(num(w.b[1], 0), 0, 600)];
+      if (Array.isArray(w.n) && w.n.length === 2)
+        this.decreeN = [Math.max(0, Math.floor(num(w.n[0], 0))), Math.max(0, Math.floor(num(w.n[1], 0)))];
+      if (Array.isArray(w.r) && w.r.length === 2)
+        for (const t of [0, 1] as const) {
+          const row = w.r[t];
+          if (Array.isArray(row) && row.length === 2)
+            this.readyAt[t] = [Math.max(0, num(row[0], 0)), Math.max(0, num(row[1], 0))];
+        }
+      if (Array.isArray(w.p) && w.p.length === 2)
+        for (const t of [0, 1] as const) {
+          const row = w.p[t];
+          if (Array.isArray(row) && row.length === 2)
+            this.pendD[t] = [num(row[0], 0) ? 1 : 0, num(row[1], 0) ? 1 : 0];
+        }
+    }
     this.fallen = [];
     for (const f of d.fallen ?? []) {
       if (!Array.isArray(f) || typeof f[2] !== "string") continue;

@@ -7,7 +7,7 @@ import {
   type ObjectiveDef,
 } from "./campaign";
 import { sfx } from "./audio";
-import { MindSystem } from "./minds";
+import { DECREE, MindSystem, willOn, type DecreeKind } from "./minds";
 import {
   saveReplay,
   type ReplayEvent,
@@ -902,6 +902,9 @@ export class Game {
         break;
       case "stop":
         this.cmdStop(this.idsToUnits(ev.ids, team));
+        break;
+      case "decree":
+        this.decree(team, ev.kind);
         break;
     }
   }
@@ -1960,6 +1963,70 @@ export class Game {
     this.publish(true);
   }
 
+  // ── decrees (Phase 3b-2): reassure your people / whisper in the enemy's ───────
+
+  /**
+   * Give a decree. The same rule for the player and the AI: it costs gold, has a
+   * cooldown, and does nothing if there is nobody to reach. The gold is taken
+   * now; the effect on people is carried out at the next whole second of the
+   * mind update (see MindSystem.queueDecree), which keeps replays and
+   * multiplayer peers bit-identical.
+   */
+  decree(team: Team, kind: DecreeKind): boolean {
+    if (this.relay && team === this.myTeam) {
+      this.emitNet({ t: 0, k: "decree", kind });
+      return false;
+    }
+    if (!willOn() || this.phase !== "playing") return false;
+    const cost = DECREE[kind].gold;
+    if (this.res[team].gold < cost) return false;
+    if (!this.minds.queueDecree(team, kind)) return false;
+    this.res[team].gold -= cost;
+    if (this.isMine(team)) this.record({ t: this.time, k: "decree", kind });
+    this.markHud();
+    return true;
+  }
+
+  /** HUD button: the local player gives a decree (with feedback) */
+  uiDecree(kind: DecreeKind): void {
+    if (this.phase !== "playing" || this.replayMode) return;
+    const team = this.myTeam;
+    if (this.res[team].gold < DECREE[kind].gold) {
+      sfx.play("error");
+      this.msg(`Not enough gold — this costs ${DECREE[kind].gold}.`, "bad");
+    } else if (this.minds.decreeWait(team, kind) > 0) {
+      sfx.play("error");
+      this.msg("Not yet — your people need a moment before the next order.", "bad");
+    } else if (!this.decree(team, kind) && !this.relay) {
+      sfx.play("error");
+      this.msg(kind === "whisper" ? "There is no one to whisper to." : "There is no one to address.", "bad");
+    }
+    this.publish(true);
+  }
+
+  /** a castle's people lost heart under siege and opened the gates (no keep destroyed) */
+  private yieldCastle(team: Team): void {
+    const mine = team === this.myTeam;
+    this.phase = mine ? "defeat" : "victory";
+    this.finishRecording();
+    if (!mine) {
+      this.unlock("conqueror");
+      this.unlock("hearts");
+      if (this.grid.theme === "desert") this.unlock("desertlord");
+      if (this.losses < 10) this.unlock("untouchable");
+    }
+    Game.clearSave();
+    sfx.play(mine ? "defeat" : "victory");
+    this.msg(
+      mine
+        ? "Your people have lost heart and open the gates… DEFEAT"
+        : "The enemy's people have lost heart and open their gates — VICTORY!",
+      mine ? "bad" : "good",
+    );
+    this.publish(true);
+    this.markHud();
+  }
+
   // ── combat stat helpers ────────────────────────────────────────────────────
 
   dmgOf(u: Unit): number {
@@ -2104,7 +2171,9 @@ export class Game {
     }
 
     this.recomputePop();
-    this.minds.update(); // once per second of game time (reads only)
+    this.minds.update(); // once per second of game time
+    const yielding = this.minds.takeYield();
+    if (yielding !== -1 && this.phase === "playing") this.yieldCastle(yielding);
 
     // ── mode timers: survival victory & global time limit
     const limit =
@@ -3835,6 +3904,7 @@ export class Game {
     { id: "desertlord", name: "Desert Lord", desc: "Win on a desert map." },
     { id: "untouchable", name: "Untouchable", desc: "Win with fewer than 10 losses." },
     { id: "survivor", name: "Unbroken", desc: "Win a Survival match." },
+    { id: "hearts", name: "Hearts and Minds", desc: "Win by breaking the enemy's will, not their walls." },
   ];
 
   unlock(id: string): void {

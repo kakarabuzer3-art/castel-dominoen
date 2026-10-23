@@ -10,6 +10,7 @@ import {
 } from "./constants";
 import type { Game } from "./engine";
 import { isBuilding, isNode } from "./engine";
+import { DECREE, WILL, willOn } from "./minds";
 import type { Building, ResKind, Unit, UnitType } from "./types";
 
 /**
@@ -686,6 +687,43 @@ export class AIController {
           g.msg("An enemy army marches on your realm!", "bad");
         }
       }
+    }
+
+    this.useDecrees();
+  }
+
+  /**
+   * Phase 3b-2: the AI's two decrees. It plays by the player's exact rules (same
+   * gold price, same cooldown, same effect) and decides only from what a lord
+   * could really know: how ITS OWN people feel, and whether ITS OWN army is on
+   * the march. It never reads the enemy's minds — a whisper is aimed blind.
+   *  - reassure: when its people waver, a gate-opening countdown runs, or a bad
+   *    rumor is held by a third of the village. Cheap, so it pays even in a pinch.
+   *  - whisper: only while its own army is out (a wave or a raid), never on Easy,
+   *    and only with gold to spare so the economy and upgrades are not starved.
+   */
+  private useDecrees(): void {
+    const g = this.g;
+    if (!willOn() || g.phase !== "playing" || g.cfg.mode !== "skirmish") return;
+    if (g.time < g.cfg.noRushMin * 60) return; // honour the no-rush treaty
+    const gold = g.res[1].gold;
+    const s = g.minds.stats(1);
+
+    let badHolders = 0;
+    for (const r of s.rumors) if (r.k !== "plenty" && r.holders > badHolders) badHolders = r.holders;
+    const countdown = s.yieldIn >= 0;
+    const needCalm =
+      countdown ||
+      s.will !== "steady" ||
+      (s.named >= WILL.minNamed && badHolders * 3 >= s.named);
+    if (needCalm && gold >= DECREE.reassure.gold + (countdown ? 0 : 100)) {
+      g.decree(1, "reassure");
+      return;
+    }
+
+    const armyOut = g.time - this.lastWave < 150 || g.time - this.lastRaid < 60;
+    if (armyOut && this.difficulty >= 1 && gold >= DECREE.whisper.gold + 120) {
+      g.decree(1, "whisper");
     }
   }
 

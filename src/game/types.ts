@@ -293,5 +293,16 @@ export const EMPTY_SNAPSHOT: HudSnapshot = {
   objectives: [],
   messages: [],
   mind: null,
-  moods: { named: 0, avgMood: 0, unhappy: 0, desperate: 0, worst: [], rumors: [] },
+  moods: {
+    named: 0,
+    avgMood: 0,
+    unhappy: 0,
+    desperate: 0,
+    worst: [],
+    rumors: [],
+    resolve: 0,
+    will: "steady",
+    yieldIn: -1,
+    decree: { reassure: 0, whisper: 0 },
+  },
 };

@@ -274,6 +274,10 @@ async function main(): Promise<void> {
         g.selection.clear();
       },
     },
+    // Phase 3b-2: decrees cross the wire. Both land before B's reconnect (tick 1500), so the
+    // resynced client must rebuild their effect from the intent log and still match exactly.
+    { tick: 1000, seat: A, fn: (c) => void c.game.decree(c.game.myTeam, "reassure") },
+    { tick: 1200, seat: B, fn: (c) => void c.game.decree(c.game.myTeam, "whisper") },
   ];
   const done = new Set<number>();
 
@@ -337,6 +341,20 @@ async function main(): Promise<void> {
     `A=${A.verified} B=${B.verified} B2=${liveB.verified}`,
   );
   check("intent relay applied (house built by A)", A.game.teamBuildings(0, "house").length >= 1 || A.game.teamBuildings(1, "house").length >= 1);
+  // Phase 3b-2: each seat gave one decree; every peer (incl. the reconnected one) and the
+  // authoritative server must have carried out exactly those two, and still agree on state.
+  const given = (g: Client["game"]): string =>
+    JSON.stringify((g.minds as unknown as { decreeN: [number, number] }).decreeN);
+  check(
+    "decrees: each seat's order was carried out on both clients and the server",
+    given(A.game) === "[1,1]" && given(liveB.game) === "[1,1]" && !!srvGame && given(srvGame) === "[1,1]",
+    `A=${given(A.game)} B=${given(liveB.game)} server=${srvGame ? given(srvGame) : "?"}`,
+  );
+  check(
+    "decrees: every villager's mind (moods, rumors, memories) is identical on both clients and the server",
+    !!srvGame && A.game.minds.hash() === liveB.game.minds.hash() && A.game.minds.hash() === srvGame.minds.hash(),
+    `mind hash A=${A.game.minds.hash()} B=${liveB.game.minds.hash()} server=${srvGame?.minds.hash()}`,
+  );
 
   A.ws.close();
   liveB.ws.close();

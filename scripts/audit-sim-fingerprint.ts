@@ -18,11 +18,14 @@ import {
 import { Game } from "../src/game/engine";
 import { MIND_FLAGS } from "../src/game/minds";
 
-// --social off  -> the Phase 3a simulation (must equal sim-fingerprints.json)
-// --social on   -> the shipped game (records sim-fingerprints-social.json)
+// --social off                -> the Phase 3a simulation (must equal sim-fingerprints.json)
+// --social on  --will off     -> Phase 3b-1 (must equal sim-fingerprints-social.json)
+// --social on  --will on      -> the shipped game (records sim-fingerprints-will.json)
 const socialIdx = process.argv.indexOf("--social");
 MIND_FLAGS.social = !(socialIdx >= 0 && process.argv[socialIdx + 1] === "off");
-console.log(`social layer: ${MIND_FLAGS.social ? "ON" : "OFF"}`);
+const willIdx = process.argv.indexOf("--will");
+MIND_FLAGS.will = !(willIdx >= 0 && process.argv[willIdx + 1] === "off");
+console.log(`social layer: ${MIND_FLAGS.social ? "ON" : "OFF"}, will layer: ${MIND_FLAGS.social && MIND_FLAGS.will ? "ON" : "OFF"}`);
 
 interface Case {
   id: string;
