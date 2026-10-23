@@ -21,6 +21,7 @@ import type {
 } from "../game/types";
 import { BuildIcon, HappyIcon, PopIcon, ResIcon, UnitIcon } from "./icons";
 import { MindSection } from "./MindSection";
+import { WillSection } from "./WillSection";
 import { SettingsOverlay, SetupScreen } from "./Setup";
 import { MODES } from "../game/constants";
 import type { Settings } from "../game/settings";
@@ -316,6 +317,7 @@ const PopularityPanel = memo(
         ≥65%: peasants immigrate · ≤30%: they leave · high = faster work
       </div>
       <MindSection snap={snap} />
+      <WillSection snap={snap} onDecree={(k) => click(() => game.uiDecree(k))()} />
     </aside>
   ),
 );

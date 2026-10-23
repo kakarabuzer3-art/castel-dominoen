@@ -80,11 +80,12 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
 | Phase | State |
 |---|---|
 | 0 — foundation (concept, AI save/load fix, hardened MP relay) | done, merged to `main` (PR #1) |
-| 2 — minds v1 (named villagers) | done, pushed on `phase-2-minds` — see below |
-| 3a — first gameplay effect: mood sets work speed | done on branch `phase-3a-morale-work` — see below |
+| 2 — minds v1 (named villagers) | done, merged to `main` (PR #2) — see below |
+| 3a — first gameplay effect: mood sets work speed | done, merged to `main` (PR #2) — see below |
 | 1 — 3D look (postprocessing, glTF models) | **not started**: needs `npm install` of new packages and a real browser to judge the result |
-| 3b-1 — friendships and rumors | done on branch `phase-3b-rumors` — see below |
-| 3b-2 — the enemy uses fear (AI whisper campaigns), morale of the whole castle, surrender terms | **next**; not started |
+| 3b-1 — friendships and rumors | done, merged to `main` (PR #2) — see below |
+| 3b-2 — castle will, decrees (reassure / whisper), the gates can open without a keep falling | done on branch `phase-3b2-will` — see below |
+| 4 — council of advisors, moral dilemmas, end-of-match Chronicle | **next**; not started |
 
 ### Phase 2 — what exists
 
@@ -168,6 +169,70 @@ liveness floors). The adaptive quality governor (`src/game/perf.ts`) is the safe
   not use fear against you yet; no castle-wide morale; no surrender terms; the
   player has no way to spread or quash a rumor. Today the layer is felt only
   through mood (and so work speed, via 3a). Numbers are a first guess, untuned.
+
+### Phase 3b-2 — the castle's will, decrees, and a castle that opens its gates
+
+A second way to win (and lose) that does not need a single wall to fall.
+
+- **Castle will.** `resolve` (0..100) = the average mood of the named people,
+  pulled down by the share that are unhappy or desperate (`WILL` in `minds.ts`).
+  Under 40 the castle is *wavering*; at 25 or less it is *breaking*. Judged only
+  once at least 8 people have names. The People drawer shows it ("Castle will")
+  and warns you in the message log at each step.
+- **The gates open.** If a castle is *breaking* **and** besieged — at least 3
+  enemy soldiers within 16 tiles of its keep **and** more of them than its own
+  soldiers there — a visible clock runs. After 60 s the people open the gates:
+  the besieger wins ("Hearts and Minds"), no keep destroyed. The clock drains
+  twice as fast as it fills, so food, a victory, a decree, or driving the army
+  back always buys time. **The same rule binds the AI and you.** Skirmish mode
+  only; campaign, Free Build and Survival keep their own win conditions.
+- **Two decrees**, for you and the AI alike (same gold price, same cooldown, same
+  effect): *Reassure* (40 gold, 60 s) cuts every bad rumor your people hold to 40%
+  of its strength and gives everyone a good memory of the lord's word;
+  *Whisper* (60 gold, 90 s) plants the false rumor "the keep is doomed" with two
+  carriers among the enemy's people. A decree is refused, and costs nothing, if
+  you lack the gold, it is cooling down, or there is nobody to reach.
+- **A lord who cannot cheat.** The AI decides only from its **own** people's stats
+  (`will-test` records every `minds` call it makes and asserts they are all
+  `stats(1)`), whispers only while its own army is out, never on Easy, only with
+  gold to spare, and not at all in Free Build. It honours the no-rush treaty.
+- **Deterministic and multiplayer-safe.** Decrees are recorded in replays, travel
+  as validated network intents (`sanitizeReplayEvent` knows `decree`), and take
+  effect at the next whole second of the mind update, so every peer computes the
+  same state. `test:mp` now sends one decree from each seat through the real
+  relay, **before** a client reconnects, and asserts both clients and the server
+  end with identical mind state (`67d42857` on all three).
+- **Switch `MIND_FLAGS.will`**: OFF is bit-identical to 3b-1. Three recorded
+  baselines now exist (`sim-fingerprints.json` = 3a, `-social.json` = 3b-1,
+  `-will.json` = 3b-2); `test:perf` checks all three. **What the rebaseline
+  changed:** 1 of the 6 recorded scenarios differs (`M-verdant-idle-300s`): the
+  AI's gold is 60 lower = exactly one whisper. The other 5 are identical, so those
+  scenarios are not evidence that the new layer is balanced — they show only that
+  it does not leak into places it should not.
+- **Honest by construction, again:** the whisper shows up in the victim's "why"
+  list as a rumor, and `mood == clamp(50 + sum(why))` still holds for everyone
+  (asserted in `test:will`).
+- **Tests added:** `test:will` (decree price/cooldown/reach, what each decree
+  really does, determinism and replay, the yield rule incl. no-yield cases such as
+  a lone raider, a held gate, a cheerful village, relief, other modes; telegraphing;
+  save/load mid-countdown and old saves; garbage in saves; network validation; the
+  AI's rules) plus the two relay checks above.
+
+**Not verified / not done (please read):**
+
+- `WillSection.tsx` and the Hud wiring have **not been seen in a browser** (no
+  browser or React packages in the authoring environment). `tsc` shows no errors
+  in any game-logic file; the UI files show only the usual missing-React-types
+  noise. Please look at the Popularity drawer on screen.
+- `test:browser` and the full `vite build` were **not** run for the same reason.
+- **Balance is a first guess.** Numbers (60 s clock, 3 soldiers, 25/40 thresholds,
+  decree prices) were chosen for clarity and fairness, not tuned by playing. In
+  particular, whether *you* find it fair to lose by your people opening the gates
+  needs real playtests: it is telegraphed (message log + countdown), but a human
+  may still feel cheated if they never read the drawer.
+- The player cannot yet *see where* a rumor is spreading on the map, and there is
+  no "negotiate / surrender terms" screen: yielding is automatic when the rule
+  holds. Surrender *terms* as a choice are not built.
 
 ### Not verified yet
 

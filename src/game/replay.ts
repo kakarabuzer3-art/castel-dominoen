@@ -17,7 +17,8 @@ export type ReplayEvent =
   | { t: number; k: "amove"; ids: number[]; x: number; y: number }
   | { t: number; k: "atk"; ids: number[]; target: number }
   | { t: number; k: "harv"; ids: number[]; node: number }
-  | { t: number; k: "stop"; ids: number[] };
+  | { t: number; k: "stop"; ids: number[] }
+  | { t: number; k: "decree"; kind: "reassure" | "whisper" };
 
 // ── intent validation (multiplayer relay) ────────────────────────────────────
 // The relay forwards player intents to every peer and applies them to its own
@@ -114,6 +115,11 @@ export function sanitizeReplayEvent(raw: unknown): ReplayEvent | null {
       const ids = cleanIds(e.ids);
       if (!ids) return null;
       return { t: 0, k, ids };
+    }
+    case "decree": {
+      const kind = e.kind;
+      if (kind !== "reassure" && kind !== "whisper") return null;
+      return { t: 0, k, kind };
     }
     default:
       return null;

@@ -145,14 +145,17 @@ function runScale(
 }
 
 console.log("\n=== 1. behaviour preservation (recorded pre-optimisation fingerprints) ===");
-// Two recorded baselines. With the Phase 3b social layer OFF the simulation must
-// still be bit-identical to Phase 3a; with it ON (the shipped game) it must match
-// the reviewed Phase 3b baseline. Neither may drift by accident.
+// Three recorded baselines, one per layer. With the Phase 3b social layer OFF the
+// simulation must still be bit-identical to Phase 3a; with it ON but the 3b-2 will
+// layer OFF it must match the reviewed 3b-1 baseline; with both ON (the shipped game)
+// it must match the reviewed 3b-2 baseline. None may drift by accident.
 for (const mode of [
-  { label: "Phase 3a baseline, social layer OFF", flag: false, file: "sim-fingerprints.json" },
-  { label: "Phase 3b baseline, social layer ON", flag: true, file: "sim-fingerprints-social.json" },
+  { label: "Phase 3a baseline, social layer OFF", flag: false, will: false, file: "sim-fingerprints.json" },
+  { label: "Phase 3b-1 baseline, social ON / will OFF", flag: true, will: false, file: "sim-fingerprints-social.json" },
+  { label: "Phase 3b-2 baseline, social ON / will ON", flag: true, will: true, file: "sim-fingerprints-will.json" },
 ]) {
   MIND_FLAGS.social = mode.flag;
+  MIND_FLAGS.will = mode.will;
   const fxPath = fileURLToPath(new URL(`./fixtures/${mode.file}`, import.meta.url));
   const fx = JSON.parse(readFileSync(fxPath, "utf8")) as Record<string, string>;
   // re-run the exact configs the fixture was recorded from
@@ -198,7 +201,8 @@ for (const mode of [
     `${same}/${cases.length} identical${diffs.length ? `\n      ${diffs[0]}` : ""}`,
   );
 }
-MIND_FLAGS.social = true; // the shipped default for everything below
+MIND_FLAGS.social = true; // the shipped defaults for everything below
+MIND_FLAGS.will = true;
 
 console.log("\n=== 2. popRatePerMin() must equal sum(popFactors()) exactly ===");
 {
