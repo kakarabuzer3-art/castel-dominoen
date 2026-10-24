@@ -1260,6 +1260,15 @@ export const Hud = ({
                   <HappyIcon level={snap.popularity} />
                 </span>
                 <span className="tabular-nums">{snap.popularity}%</span>
+                {snap.moods.named > 0 && snap.moods.will !== "steady" && (
+                  <span
+                    className={snap.moods.yieldIn >= 0 ? "cost-bad" : "text-[#e8c13c]"}
+                    title="Your people are losing heart — open this panel"
+                    data-testid="pop-tab-warn"
+                  >
+                    ⚠{snap.moods.yieldIn >= 0 ? ` ${snap.moods.yieldIn}s` : ""}
+                  </span>
+                )}
               </span>
             }
           >
