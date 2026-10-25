@@ -201,8 +201,11 @@ export class Renderer3D {
   ) {
     this.r3 = new THREE.WebGLRenderer({
       canvas,
-      antialias: game.settings.quality > 0,
-      preserveDrawingBuffer: true,
+      // MSAA and a preserved back buffer are both costly on integrated GPUs;
+      // keep them only for the highest preset / automated screenshot runs
+      antialias: game.settings.quality === 2,
+      preserveDrawingBuffer:
+        typeof navigator !== "undefined" && navigator.webdriver === true,
       powerPreference: "high-performance",
     });
     this.r3.setPixelRatio(1);
@@ -1372,8 +1375,14 @@ export class Renderer3D {
 
     this.r3.render(this.scene, this.cam);
     this.drawOverlay(dragSel);
-    this.mm.render(g);
+    // the minimap is a separate canvas that keeps its last paint, so it does
+    // not need to be redrawn every frame (about 10 Hz is plenty)
+    if (tWall - this.mmLast > 0.1 || tWall < this.mmLast) {
+      this.mmLast = tWall;
+      this.mm.render(g);
+    }
   }
+  private mmLast = -1;
 
   /**
    * Push the adaptive governor's tier into the WebGL scene. Only runs on an
