@@ -186,6 +186,21 @@ export class Renderer3D {
   private bVersion = -1;
   private disposed = false;
 
+  /** true when the browser's WebGL runs on the CPU (no real graphics card in use) */
+  static isSoftware(): boolean {
+    try {
+      const c = document.createElement("canvas");
+      const gl = (c.getContext("webgl2") || c.getContext("webgl")) as WebGLRenderingContext | null;
+      if (!gl) return false;
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? "") : "";
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      return /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(name);
+    } catch {
+      return false;
+    }
+  }
+
   static supported(): boolean {
     try {
       const c = document.createElement("canvas");
