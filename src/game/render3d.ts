@@ -13,7 +13,7 @@ import {
 } from "./constants";
 import type { Game } from "./engine";
 import { MinimapRenderer } from "./minimap";
-import { hash2 } from "./rng";
+import { fbm, hash2 } from "./rng";
 import type { Building, Team } from "./types";
 
 const FOG_H = 5.2; // above tallest building; screen-space offset compensated per frame
@@ -404,13 +404,34 @@ export class Renderer3D {
         else if (t === T_OASIS) c = pal.oasis[(tone * 2) | 0];
         else c = pal.grass[(tone * 4) | 0];
         const shade = 0.94 + hash2(tx * 3 + 11, ty * 5 + 7) * 0.12;
-        colors[i * 3] = c[0] * shade;
-        colors[i * 3 + 1] = c[1] * shade;
-        colors[i * 3 + 2] = c[2] * shade;
+        // Phase 1b: large soft meadow patches (lush vs. sun-dried) baked into
+        // the vertex colours — no runtime cost. Ground tiles only.
+        let pr = 1;
+        let pg = 1;
+        let pb = 1;
+        if (t !== T_WATER && t !== T_FORD && t !== T_BRIDGE && t !== T_ROCKY) {
+          const patch = fbm(tx, ty, 7919, 0.07, 3) - 0.5; // about -0.3..0.3
+          pr = 1 + patch * 0.34;
+          pg = 1 + patch * 0.1;
+          pb = 1 - patch * 0.3;
+        }
+        colors[i * 3] = c[0] * shade * pr;
+        colors[i * 3 + 1] = c[1] * shade * pg;
+        colors[i * 3 + 2] = c[2] * shade * pb;
       }
     }
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geom.computeVertexNormals();
+    // Phase 1b: slopes read darker, so hills have shape even before shadows
+    {
+      const nrm = geom.attributes.normal as THREE.BufferAttribute;
+      for (let i = 0; i < nrm.count; i++) {
+        const k = 0.78 + 0.22 * Math.max(0, Math.min(1, nrm.getY(i)));
+        colors[i * 3] *= k;
+        colors[i * 3 + 1] *= k;
+        colors[i * 3 + 2] *= k;
+      }
+    }
     const m = new THREE.MeshLambertMaterial({ vertexColors: true });
     this.terrain = new THREE.Mesh(geom, m);
     this.terrain.position.set(w / 2, 0, h / 2);
