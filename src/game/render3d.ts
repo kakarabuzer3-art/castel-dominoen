@@ -208,10 +208,15 @@ export class Renderer3D {
     this.r3.setPixelRatio(1);
     this.r3.shadowMap.enabled =
       game.settings.shadows && game.settings.quality > 0;
-    this.r3.shadowMap.type = THREE.PCFShadowMap;
+    this.r3.shadowMap.type =
+      game.settings.quality === 2 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    // Phase 1a: filmic tone mapping gives richer contrast and warmer highlights
+    // at zero extra GPU cost (it is part of each material's existing shader).
+    this.r3.toneMapping = THREE.ACESFilmicToneMapping;
+    this.r3.toneMappingExposure = 1.12;
     this.cam = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 500);
-    this.hemi = new THREE.HemisphereLight(0xcfe4ff, 0x6b6046, 0.85);
-    this.sun = new THREE.DirectionalLight(0xfff2d0, 1.15);
+    this.hemi = new THREE.HemisphereLight(0xbfd8ff, 0x7a6544, 0.8);
+    this.sun = new THREE.DirectionalLight(0xffe2b0, 1.3);
     this.sun.position.set(60, 90, 40);
     this.sun.castShadow = this.r3.shadowMap.enabled;
     const sc = this.sun.shadow;
@@ -448,6 +453,7 @@ export class Renderer3D {
       map: this.fogTex,
       transparent: true,
       depthWrite: false,
+      toneMapped: false, // fog of war must keep its exact darkness
     });
     const fg = new THREE.PlaneGeometry(w, h, 1, 1);
     fg.rotateX(-Math.PI / 2);
@@ -1300,13 +1306,13 @@ export class Renderer3D {
       if (c >= 0.65 && c < 0.9) night = Math.min(1, (c - 0.65) / 0.08);
       else if (c >= 0.9) night = Math.max(0, 1 - (c - 0.9) / 0.1);
     }
-    this.sun.intensity = 1.15 - night * 0.92;
-    this.sun.color.setRGB(1, 0.95 - night * 0.35, 0.82 - night * 0.5);
-    this.hemi.intensity = 0.85 - night * 0.62;
+    this.sun.intensity = 1.3 - night * 1.05;
+    this.sun.color.setRGB(1, 0.89 - night * 0.3, 0.69 - night * 0.4);
+    this.hemi.intensity = 0.8 - night * 0.58;
     this.hemi.color.setRGB(0.81 - night * 0.62, 0.89 - night * 0.62, 1 - night * 0.45);
     const bg = this.scene.background as THREE.Color;
     bg.setRGB(0.05 + 0.02 * (1 - night), 0.06 + 0.02 * (1 - night), 0.04 + 0.05 * night);
-    this.sun.position.set(tx + 60, 90, tz + 40);
+    this.sun.position.set(tx + 70, 70, tz + 35); // lower sun: longer, more readable shadows
     this.sun.target.position.set(tx, 0, tz);
     this.sun.target.updateMatrixWorld();
 
