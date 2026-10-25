@@ -105,6 +105,10 @@ export const Profiler = ({
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
         <span className="text-[#9c8a63]">Renderer</span>
         <span className="text-right text-[#e8c877]">{game.renderer?.kind}</span>
+        <span className="text-[#9c8a63]">Why</span>
+        <span className="text-right text-[10px] leading-tight" data-testid="renderer-note">
+          {game.rendererNote}
+        </span>
         <span className="text-[#9c8a63]">FPS (this device)</span>
         <span className="text-right">{fps}</span>
         <span className="text-[#9c8a63]">Frame ms (render)</span>

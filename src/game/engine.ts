@@ -308,12 +308,20 @@ export class Game {
     this.inputDisposers = this.disposers.splice(before);
   }
 
+  /** why the renderer is what it is (shown in the F3 profiler) */
+  rendererNote = "starting…";
+  private upgrading = false;
+
   /** lazy-load the WebGL renderer and hot-swap it in place of the 2D one */
   private async upgradeTo3D(pref: "auto" | "3d"): Promise<void> {
+    if (this.upgrading) return;
+    this.upgrading = true;
+    this.rendererNote = "loading 3D…";
     try {
       const m = await import("./render3d");
       if (this.dead || !this.canvas || this.renderer?.kind === "3d") return;
       if (!m.Renderer3D.supported()) {
+        this.rendererNote = "WebGL is not available in this browser (check chrome://gpu and hardware acceleration)";
         if (pref === "3d")
           this.msg("WebGL unavailable — staying on the 2D renderer.", "bad");
         return;
@@ -328,13 +336,17 @@ export class Game {
       this.renderer?.dispose();
       const r3 = new m.Renderer3D(this, nc);
       this.renderer = r3;
+      this.rendererNote = "3D active";
       this.perf.noteUpgradedTo3D(); // fresh 3D renderer → fresh one-shot fallback
       if (this.minimapEl) r3.setMinimap(this.minimapEl);
       this.bindInputTracked(nc);
       this.publish(true);
-    } catch {
+    } catch (e) {
+      this.rendererNote = `3D failed to start: ${e instanceof Error ? e.message : String(e)}`;
       if (pref === "3d")
         this.msg("3D renderer failed to start — using 2D.", "bad");
+    } finally {
+      this.upgrading = false;
     }
   }
   private disposers: Array<() => void> = [];
@@ -395,7 +407,17 @@ export class Game {
   formation = 0; // 0 loose, 1 line, 2 column
 
   applySettings(s2: Settings): void {
+    const prevPref = this.settings.renderer;
     this.settings = { ...s2 };
+    // switching Renderer to 3D/Auto now takes effect immediately (no reload)
+    if (
+      s2.renderer !== prevPref &&
+      s2.renderer !== "2d" &&
+      this.canvas &&
+      this.renderer?.kind === "2d"
+    )
+      void this.upgradeTo3D(s2.renderer);
+    if (s2.renderer === "2d") this.rendererNote = "2D chosen in Settings";
     sfx.configure({
       sound: s2.sound,
       master: s2.masterVol,
@@ -1039,9 +1061,10 @@ export class Game {
     this.renderer = new Renderer(this, nc);
     if (this.minimapEl) this.renderer.setMinimap(this.minimapEl);
     this.bindInputTracked(nc);
+    this.rendererNote = "Auto switched to 2D: 3D stayed under ~38 fps on this machine";
     const fps = this.perf.state.frameMs > 0 ? Math.round(1000 / this.perf.state.frameMs) : 0;
     this.msg(
-      `3D ran at about ${fps || "<38"} fps here, so the game switched to 2D. Force 3D: Settings → Graphics → Renderer → 3D (then reload).`,
+      `3D ran at about ${fps || "<38"} fps here, so the game switched to 2D. Force 3D: Settings → Graphics → Renderer → 3D.`,
       "info",
     );
     this.perf.clearFallbackLatch();
