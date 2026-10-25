@@ -249,6 +249,11 @@ export class Renderer3D {
     this.buildStaticSets();
     this.buildDynamicSets();
     this.autoResize();
+    if (/swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(this.gpuName()))
+      this.game.msg(
+        "Your browser draws 3D on the CPU (software), so it will be slow. Turn ON Chrome Settings → System → “Use graphics acceleration when available”, then restart Chrome.",
+        "bad",
+      );
   }
 
   teamColor(t: 0 | 1): string {
@@ -2062,6 +2067,18 @@ export class Renderer3D {
   }
 
   /** profiler info */
+  /** the graphics chip the browser is really using ("" if it hides it) */
+  gpuName(): string {
+    try {
+      const gl = this.r3.getContext();
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      if (ext) return String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? "");
+    } catch {
+      /* ignore */
+    }
+    return "";
+  }
+
   stats(): { calls: number; tris: number; instances: number } {
     const info = this.r3.info.render;
     let instances = 0;

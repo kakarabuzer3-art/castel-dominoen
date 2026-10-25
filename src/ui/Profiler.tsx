@@ -109,6 +109,10 @@ export const Profiler = ({
         <span className="text-right text-[10px] leading-tight" data-testid="renderer-note">
           {game.rendererNote}
         </span>
+        <span className="text-[#9c8a63]">GPU</span>
+        <span className="text-right text-[10px] leading-tight break-words" data-testid="gpu-name">
+          {(game.renderer as { gpuName?: () => string } | null)?.gpuName?.() || "hidden by browser"}
+        </span>
         <span className="text-[#9c8a63]">FPS (this device)</span>
         <span className="text-right">{fps}</span>
         <span className="text-[#9c8a63]">Frame ms (render)</span>
