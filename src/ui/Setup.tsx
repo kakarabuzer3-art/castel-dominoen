@@ -215,6 +215,9 @@ export const SetupScreen = ({
           <h1 className="font-medieval gold-title anim-glow text-4xl font-bold tracking-wide">
             CASTLE DOMINION
           </h1>
+          <div className="text-[10px] text-[#6f5f3f] tabular-nums mt-0.5" data-testid="build-stamp">
+            build {typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev"}
+          </div>
         </div>
         <div className="flex gap-1.5 justify-center mb-4">
           {(

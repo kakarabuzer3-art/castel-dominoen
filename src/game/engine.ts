@@ -1039,7 +1039,11 @@ export class Game {
     this.renderer = new Renderer(this, nc);
     if (this.minimapEl) this.renderer.setMinimap(this.minimapEl);
     this.bindInputTracked(nc);
-    this.msg("This machine struggled with 3D — switched to the 2D renderer.", "info");
+    const fps = this.perf.state.frameMs > 0 ? Math.round(1000 / this.perf.state.frameMs) : 0;
+    this.msg(
+      `3D ran at about ${fps || "<38"} fps here, so the game switched to 2D. Force 3D: Settings → Graphics → Renderer → 3D (then reload).`,
+      "info",
+    );
     this.perf.clearFallbackLatch();
     this.publish(true);
   }
