@@ -326,6 +326,14 @@ export class Game {
           this.msg("WebGL unavailable — staying on the 2D renderer.", "bad");
         return;
       }
+      if (pref === "auto" && m.Renderer3D.isSoftware()) {
+        // no real graphics card in use: 3D would crawl at ~15 fps, so start in
+        // the fast 2D renderer straight away instead of flipping after seconds
+        this.rendererNote =
+          "Browser has no hardware graphics (software WebGL) — Auto chose 2D. Fix: Chrome Settings → System → Use graphics acceleration, update the Intel graphics driver, restart Chrome.";
+        this.msg("This browser has no graphics acceleration, so Auto stays on the fast 2D view. Turn on hardware acceleration in Chrome to get 3D.", "info");
+        return;
+      }
       const old = this.canvas;
       const nc = document.createElement("canvas");
       nc.className = old.className;
