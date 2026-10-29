@@ -1280,6 +1280,20 @@ export class Renderer3D {
     this.addInst(this.uParts, pickG, toolM, MAXU, false);
     this.addInst(this.uParts, hamG, toolM, MAXU, false);
     this.addInst(this.uParts, sheafG, hayM, MAXU, false);
+    // Phase 1c: the Lord — a golden crown and a flowing cape (two instances max)
+    const crownG = geo("ucrown", () =>
+      mergeBoxes([
+        { s: [0.2, 0.06, 0.2], p: [0, 0, 0] },
+        { s: [0.04, 0.08, 0.04], p: [-0.08, 0.06, -0.08] },
+        { s: [0.04, 0.08, 0.04], p: [0.08, 0.06, -0.08] },
+        { s: [0.04, 0.08, 0.04], p: [-0.08, 0.06, 0.08] },
+        { s: [0.04, 0.08, 0.04], p: [0.08, 0.06, 0.08] },
+        { s: [0.04, 0.12, 0.04], p: [0, 0.07, 0] },
+      ]),
+    );
+    const capeG = geo("ucape", () => new THREE.BoxGeometry(0.34, 0.58, 0.05));
+    this.addInst(this.uParts, crownG, mat("ucrown", () => new THREE.MeshLambertMaterial({ color: 0xf0c040 })), 4, false);
+    this.addInst(this.uParts, capeG, bodyM, 4);
 
     this.projMesh = this.addInst([], geo("arrow", () => new THREE.BoxGeometry(0.04, 0.04, 0.4)), mat("arrow", () => new THREE.MeshBasicMaterial({ color: 0xefe3c8 })), 200, false);
     this.rockMesh = this.addInst([], geo("rockp", () => new THREE.SphereGeometry(0.14, 6, 5)), mat("rockp", () => new THREE.MeshBasicMaterial({ color: 0x8f897c })), 60, false);
@@ -1570,6 +1584,23 @@ export class Renderer3D {
     const P_PICK = 12;
     const P_HAM = 13;
     const P_SHEAF = 14;
+    const P_CROWN = 15;
+    const P_CAPE = 16;
+    // Phase 1c: uniforms. Team colour stays the identity; unit type changes the
+    // cloth (tabard) shade and the headgear metal, so roles read at a glance.
+    const hexOf = (a: string, b: string, k: number): string =>
+      "#" + new THREE.Color(a).lerp(new THREE.Color(b), k).getHexString();
+    const uni: Array<Record<string, { body: string; helm: string }>> = [0, 1].map((tm) => {
+      const base = this.teamColor(tm as Team);
+      return {
+        villager: { body: hexOf(base, "#b89a6a", 0.62), helm: "#ffffff" },
+        militia: { body: base, helm: "#8b929c" },
+        spearman: { body: hexOf(base, "#ffffff", 0.14), helm: "#c0a05a" },
+        archer: { body: hexOf(base, "#2c3a1e", 0.42), helm: "#6a5238" },
+        knight: { body: hexOf(base, "#e0b64c", 0.3), helm: "#e4e8ee" },
+        catapult: { body: base, helm: "#ffffff" },
+      };
+    });
     for (const u of g.units) {
       const ux = u.x / TILE;
       const uz = u.y / TILE;
@@ -1591,6 +1622,9 @@ export class Renderer3D {
       const siege = u.type === "catapult";
       const lean = moving ? 0.1 : 0;
       const teamOrHit = hit ?? teamC;
+      const uf = uni[u.team]?.[u.type];
+      const bodyCol = hit ?? uf?.body ?? teamC;
+      const helmCol = hit ?? uf?.helm ?? teamC;
 
       if (siege) {
         if (fullDetail) {
@@ -1612,7 +1646,7 @@ export class Renderer3D {
       // torso + head (a mounted rider sits above the horse)
       const torsoY = mounted ? y0 + 0.78 + bob : y0 + 0.32 + bob;
       const headY = mounted ? y0 + 1.1 + bob : y0 + 0.62 + bob;
-      set(P_BODY, ux, torsoY, uz, ry, 1, mounted ? 1.15 : 1, 1, teamOrHit, lean);
+      set(P_BODY, ux, torsoY, uz, ry, 1, mounted ? 1.15 : 1, 1, bodyCol, lean);
       if (someDetail) set(P_HEAD, ux, headY, uz, ry, 1, 1, 1, undefined, lean);
 
       // stride legs — mounted units get a four-beat horse gait instead
@@ -1656,7 +1690,7 @@ export class Renderer3D {
 
       // helmet = immediate military read
       if (someDetail && u.type !== "villager")
-        set(P_HELM, ux, headY + 0.16, uz, ry, 1, 1, 1, teamOrHit, lean);
+        set(P_HELM, ux, headY + 0.16, uz, ry, 1, 1, 1, helmCol, lean);
 
       if (!fullDetail) {
         if (u.selected) sel.push([ux, y0 + 0.03, uz]);
@@ -1754,6 +1788,37 @@ export class Renderer3D {
         }
       }
       if (u.selected) sel.push([ux, y0 + 0.03, uz]);
+    }
+    // ── Phase 1c: each side's Lord stands before his keep (presentation only) ─
+    for (const b of g.buildings) {
+      if (b.type !== "keep" || !b.built || b.hp <= 0) continue;
+      const cxT = b.tx + b.w / 2;
+      const czT = b.ty + b.h / 2;
+      if (cxT < vb.x0 - 3 || cxT > vb.x1 + 3 || czT < vb.y0 - 3 || czT > vb.y1 + 3) continue;
+      if (b.team !== g.myTeam && !g.isVisibleTo(g.myTeam, cxT * TILE, czT * TILE)) continue;
+      // stand on the keep's side that faces the other keep
+      const foe = g.buildings.find((o) => o.type === "keep" && o.team !== b.team);
+      const ang = foe ? Math.atan2(foe.ty + foe.h / 2 - czT, foe.tx + foe.w / 2 - cxT) : Math.PI / 2;
+      const lx = cxT + Math.cos(ang) * (b.w / 2 + 0.55);
+      const lz = czT + Math.sin(ang) * (b.h / 2 + 0.55);
+      const ly = this.heightAt(Math.floor(lx), Math.floor(lz));
+      const lry = -ang + Math.PI / 2;
+      const lfx = Math.sin(lry);
+      const lfz = Math.cos(lry);
+      const lrx = Math.cos(lry);
+      const lrz = -Math.sin(lry);
+      const base = this.teamColor(b.team);
+      const sway = g.settings.reducedMotion ? 0 : Math.sin(t * 1.4 + b.id) * 0.02;
+      set(P_BODY, lx, ly + 0.44 + sway, lz, lry, 1.3, 1.35, 1.3, hexOf(base, "#e0b64c", 0.22));
+      set(P_HEAD, lx, ly + 0.9 + sway, lz, lry, 1.25, 1.25, 1.25);
+      set(P_CROWN, lx, ly + 1.07 + sway, lz, lry, 1, 1, 1);
+      set(P_CAPE, lx - lfx * 0.2, ly + 0.5 + sway, lz - lfz * 0.2, lry, 1, 1, 1, hexOf(base, "#000000", 0.35), -0.08);
+      for (const side of [-1, 1]) {
+        set(P_LEG, lx + lrx * 0.09 * side, ly + 0.2, lz + lrz * 0.09 * side, lry, 1.2, 1.3, 1.2);
+      }
+      // a sword at the hip and a shield on the arm: a ruler who can fight
+      set(P_SWORD, lx + lfx * 0.22 + lrx * 0.2, ly + 0.5, lz + lfz * 0.22 + lrz * 0.2, lry, 1, 1, 1, undefined, -0.2);
+      set(P_SHIELD, lx - lrx * 0.3, ly + 0.52, lz - lrz * 0.3, lry, 1.2, 1.3, 1.2, hexOf(base, "#e0b64c", 0.45));
     }
     // ── presentation-only deaths: diff last frame's visible-id snapshots ─────
     if (this.lastU.size > 0) {
